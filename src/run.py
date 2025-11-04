@@ -8,6 +8,7 @@ from a BIDS dataset and outputs both standard FreeSurfer results and NIDM format
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,7 @@ import click
 from bids import BIDSLayout
 from src.freesurfer.wrapper import FreeSurferWrapper
 from src.utils import get_version_info, setup_logging
+from rdflib import Graph
 
 try:
     from importlib.metadata import version
@@ -53,6 +55,10 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
     # Convert paths to Path objects
     bids_dir = Path(bids_dir)
 
+    nidm_input_dir = bids_dir.parent / "NIDM"
+    if not nidm_input_dir.exists():
+        nidm_input_dir = None
+
     # First create the main output directory
     app_output_dir = Path(output_dir) / "freesurfer_bidsapp"
     freesurfer_dir = app_output_dir / "freesurfer"
@@ -88,14 +94,23 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
             app_output_dir,  # Pass the app_output_dir to FreeSurferWrapper
             freesurfer_license,
         )
+        freesurfer_wrapper.nidm_input_dir = nidm_input_dir
     except Exception as e:
         logger.error(f"Error initializing FreeSurfer wrapper: {str(e)}")
         sys.exit(1)
 
-    return layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, version_info
+    return layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, nidm_input_dir, version_info
 
 
-def nidm_conversion(nidm_dir, freesurfer_dir, participant_label, freesurfer_wrapper, bids_session=None, verbose=False):
+def nidm_conversion(
+    nidm_dir,
+    freesurfer_dir,
+    participant_label,
+    freesurfer_wrapper,
+    bids_session=None,
+    verbose=False,
+    nidm_input_dir=None,
+):
     """Convert FreeSurfer outputs to NIDM format.
     Args:
         nidm_dir (str): Path to NIDM output directory
@@ -104,6 +119,7 @@ def nidm_conversion(nidm_dir, freesurfer_dir, participant_label, freesurfer_wrap
         freesurfer_wrapper (FreeSurferWrapper): Instance of FreeSurferWrapper containing T1 info
         bids_session (str): Session label (without "ses-" prefix)
         verbose (bool): Enable verbose output
+        nidm_input_dir (Path or None): Optional path to existing NIDM resources
     """
     # Determine subject directory with session info
     if bids_session is None:
@@ -121,38 +137,139 @@ def nidm_conversion(nidm_dir, freesurfer_dir, participant_label, freesurfer_wrap
 
     os.makedirs(nidm_dir, exist_ok=True)
 
+    existing_nidm_file = None
+    if nidm_input_dir and nidm_input_dir.exists():
+        # Prefer top-level nidm.ttl then fall back to any .ttl/.jsonld file present
+        primary_candidate = nidm_input_dir / "nidm.ttl"
+        if primary_candidate.exists():
+            existing_nidm_file = primary_candidate
+        else:
+            for pattern in ("*.ttl", "*.jsonld", "*.json-ld"):
+                try:
+                    existing_nidm_file = next(nidm_input_dir.glob(pattern))
+                    break
+                except StopIteration:
+                    continue
+
     # Build the command
-    fs_to_nidm_path = os.path.join(os.path.dirname(__file__), "segstats_jsonld", "segstats_jsonld", "fs_to_nidm.py")
-    cmd = [
-        "python3",
-        fs_to_nidm_path,
-        "-s",
-        subject_dir,  # subject directory
-        "-o",
-        nidm_dir,  # output directory
-        "-j",  # output as JSON-LD
-    ]
+    module_name = "segstats_jsonld.fs_to_nidm"
+    
+    copied_nidm = None
+    if existing_nidm_file:
+        copied_nidm = Path(nidm_dir) / existing_nidm_file.name
+        try:
+            if existing_nidm_file.resolve() != copied_nidm.resolve():
+                shutil.copy2(existing_nidm_file, copied_nidm)
+                logger.info(f"Copied existing NIDM file to output directory: {copied_nidm}")
+            else:
+                logger.info(f"Input and output NIDM paths are the same: {copied_nidm}")
+        except OSError as copy_error:
+            logger.error(
+                "Failed to copy existing NIDM file to output directory (%s). Error: %s",
+                copied_nidm,
+                copy_error,
+            )
+            logger.error("Cannot proceed without copying to avoid overwriting input file.")
+            sys.exit(1)
 
-    # Add T1 image information if available
-    if t1_images:
-        cmd.extend(["--t1"] + t1_images)
-
-    # Add T2 image information if available
-    if t2_images:
-        cmd.extend(["--t2"] + t2_images)
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode == 0:
-        logger.info("================================")
-        logger.info(f"NIDM conversion complete for {fs_subject_id}")
-        logger.info("================================")
+    # Build command: use -n for existing NIDM file, -o for new output
+    # Note: fs_to_nidm does not allow both -n and -o at the same time
+    if copied_nidm:
+        cmd = [sys.executable, "-m", module_name, "-s", subject_dir, "-n", str(copied_nidm), "-j", "--forcenidm"]
+        if verbose:
+            logger.info(f"Found existing NIDM file: {existing_nidm_file}")
+            logger.info(f"Adding data to existing NIDM file: {copied_nidm}")
     else:
+        cmd = [sys.executable, "-m", module_name, "-s", subject_dir, "-o", str(nidm_dir), "-j"]
+        if nidm_input_dir and verbose:
+            logger.info(f"No NIDM file found in {nidm_input_dir}; creating new output")
+
+    # Log the command for debugging and replay purposes
+    logger.info(f"Running command: {' '.join(cmd)}")
+
+    existing_outputs = {path.name for path in Path(nidm_dir).glob("*")}
+
+    env = os.environ.copy()
+    project_root = Path(__file__).resolve().parents[1]
+    existing_pythonpath = env.get("PYTHONPATH")
+    pythonpath_entries = [str(project_root), str(project_root / "src"), str(project_root / "src" / "segstats_jsonld")]
+    if existing_pythonpath:
+        pythonpath_entries.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
+    env.setdefault("RDFLIB_STORE_NO_BIND_OVERRIDE", "1")
+    env.setdefault("SEGSTATS_JSONLD_ALLOW_NEW_KEYS", "1")
+    env.pop("PYTHONHOME", None)
+
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+    if result.returncode != 0:
         logger.error(f"NIDM conversion failed for {fs_subject_id}")
         logger.error(f"Error output: {result.stderr}")
         if verbose:
             logger.error(f"Command output: {result.stdout}")
         sys.exit(1)
+    
+    # Log what files exist in output directory after conversion
+    logger.info(f"Files in NIDM output directory after conversion:")
+    for file in Path(nidm_dir).glob("*"):
+        logger.info(f"  - {file.name} ({file.stat().st_size} bytes)")
+
+    new_outputs = [path for path in Path(nidm_dir).glob("*") if path.name not in existing_outputs]
+
+    if not new_outputs and not copied_nidm:
+        logger.warning("No new NIDM outputs were generated; skipping aggregation step")
+        return
+
+    aggregation_sources = []
+    if copied_nidm and Path(copied_nidm).exists():
+        aggregation_sources.append(Path(copied_nidm))
+    elif existing_nidm_file and existing_nidm_file.exists():
+        aggregation_sources.append(existing_nidm_file)
+
+    for candidate in new_outputs:
+        if candidate.suffix.lower() in {".ttl", ".json", ".jsonld", ".json-ld"}:
+            aggregation_sources.append(candidate)
+
+    if not aggregation_sources:
+        logger.warning("No NIDM sources found to aggregate after conversion")
+        return
+
+    def _guess_rdf_format(path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix in {".ttl", ".turtle", ".n3"}:
+            return "turtle"
+        if suffix in {".json", ".jsonld", ".json-ld"}:
+            return "json-ld"
+        return "xml"
+
+    aggregated_graph = Graph()
+    for src in aggregation_sources:
+        try:
+            aggregated_graph.parse(str(src), format=_guess_rdf_format(src))
+        except Exception as parse_error:  # pragma: no cover - depends on runtime env
+            logger.warning(f"Skipping NIDM source {src} due to parse error: {parse_error}")
+
+    if len(aggregated_graph) == 0:
+        logger.warning("Aggregated NIDM graph is empty; skipping serialization")
+        return
+
+    target_base = Path(nidm_dir) / fs_subject_id
+    target_ttl = target_base.with_suffix(".ttl")
+    target_jsonld = target_base.with_suffix(".jsonld")
+
+    try:
+        aggregated_graph.serialize(destination=str(target_ttl), format="turtle")
+    except Exception as serialize_error:  # pragma: no cover
+        logger.warning(f"Failed to write aggregated TTL output {target_ttl}: {serialize_error}")
+
+    try:
+        aggregated_graph.serialize(destination=str(target_jsonld), format="json-ld", indent=2)
+    except Exception as serialize_error:  # pragma: no cover
+        logger.warning(f"Failed to write aggregated JSON-LD output {target_jsonld}: {serialize_error}")
+
+    logger.info("================================")
+    logger.info(f"NIDM conversion complete for {fs_subject_id}")
+    logger.info("================================")
 
 
 def process_participant(
@@ -175,7 +292,7 @@ def process_participant(
         skip_nidm (bool): Skip NIDM export
         verbose (bool): Enable verbose output
     """
-    layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, version_info = initialize(
+    layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, nidm_input_dir, version_info = initialize(
         bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose
     )
 
@@ -203,7 +320,14 @@ def process_participant(
         sys.exit(1)
 
     if success and not skip_nidm:
-        nidm_conversion(nidm_dir, freesurfer_dir, participant_label, freesurfer_wrapper, verbose=verbose)
+        nidm_conversion(
+            nidm_dir,
+            freesurfer_dir,
+            participant_label,
+            freesurfer_wrapper,
+            verbose=verbose,
+            nidm_input_dir=nidm_input_dir,
+        )
 
     logger.info("BIDS-FreeSurfer processing complete.")
     return 0
@@ -231,7 +355,7 @@ def process_session(
         skip_nidm (bool): Skip NIDM export
         verbose (bool): Enable verbose output
     """
-    layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, version_info = initialize(
+    layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, nidm_input_dir, version_info = initialize(
         bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose
     )
 
@@ -266,7 +390,15 @@ def process_session(
         sys.exit(1)
 
     if success and not skip_nidm:
-        nidm_conversion(nidm_dir, freesurfer_dir, participant_label, freesurfer_wrapper, bids_session, verbose=verbose)
+        nidm_conversion(
+            nidm_dir,
+            freesurfer_dir,
+            participant_label,
+            freesurfer_wrapper,
+            bids_session,
+            verbose=verbose,
+            nidm_input_dir=nidm_input_dir,
+        )
 
     logger.info("BIDS-FreeSurfer processing complete.")
     return 0
