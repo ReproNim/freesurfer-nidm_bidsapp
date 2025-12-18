@@ -233,14 +233,7 @@ class FreeSurferWrapper:
             Image suffix (e.g., 'T1w', 'T2w')
         session_id : str, optional
             Session ID (without 'ses-' prefix)
-            
-        subject_id : str
-            Subject ID (without 'sub-' prefix)
-        suffix : str
-            Image suffix (e.g., 'T1w', 'T2w')
-        session_id : str, optional
-            Session ID (without 'ses-' prefix)
-            
+
         Returns
         -------
         list
@@ -253,18 +246,6 @@ class FreeSurferWrapper:
             "suffix": suffix,
             "extension": [".nii", ".nii.gz"]
         }
-        
-        if session_id:
-            query["session"] = session_id
-            
-        return layout.get(**query)
-
-    def _copy_file(self, src, dest):
-        """Copy file if it exists."""
-        if src.exists():
-            shutil.copy2(src, dest)
-            return True
-        return False
         
         if session_id:
             query["session"] = session_id
