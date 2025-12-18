@@ -1,3 +1,4 @@
+scripts/
 setup_repo.py
 tests/data/
 *.bak/

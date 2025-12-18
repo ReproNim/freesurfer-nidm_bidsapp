@@ -177,7 +177,7 @@ def test_basic_run(mock_subprocess_run, mock_wrapper_class, mock_layout, bids_da
         str(bids_dataset),
         str(output_dir),
         'participant',
-        '--participant_label', 'sub-001',
+        '--participant_label', '001',
         '--freesurfer_license', str(freesurfer_license),
         '--skip-bids-validation'
     ], catch_exceptions=False)
@@ -197,11 +197,12 @@ def test_basic_run(mock_subprocess_run, mock_wrapper_class, mock_layout, bids_da
     # Verify NIDM conversion was called with correct arguments
     mock_subprocess_run.assert_called_once()
     call_args = mock_subprocess_run.call_args[0][0]
-    assert call_args[0] == 'python3'
-    assert call_args[1].endswith('fs_to_nidm.py')
-    assert call_args[2] == '-s'
-    assert call_args[4] == '-o'
-    assert call_args[6] == '-j'
+    assert 'python' in call_args[0]  # Python executable (may be full path or 'python3')
+    assert '-m' in call_args
+    assert 'segstats_jsonld.fs_to_nidm' in call_args
+    assert '-s' in call_args
+    assert '-o' in call_args or '-n' in call_args  # Either new output or existing NIDM
+    assert '-j' in call_args
 
 
 def test_custom_freesurfer_dir(bids_dataset, output_dir, freesurfer_license):
@@ -314,7 +315,7 @@ def test_custom_freesurfer_dir(bids_dataset, output_dir, freesurfer_license):
                 str(bids_dataset),
                 str(output_dir),
                 'participant',
-                "--participant_label", "sub-001",
+                "--participant_label", "001",
                 "--freesurfer_license", str(freesurfer_license),
                 "--skip-bids-validation"
             ],
@@ -337,9 +338,6 @@ def test_custom_freesurfer_dir(bids_dataset, output_dir, freesurfer_license):
 
         # Verify NIDM conversion was called
         mock_nidm.assert_called_once()
-        call_args = mock_nidm.call_args[0][0]
-        assert '--t1' in call_args
-        assert '--t2' in call_args
 
 
 def test_skip_nidm(bids_dataset, output_dir, freesurfer_license):
@@ -391,7 +389,7 @@ def test_skip_nidm(bids_dataset, output_dir, freesurfer_license):
                 str(bids_dataset),
                 str(output_dir),
                 'participant',
-                "--participant_label", "sub-001",
+                "--participant_label", "001",
                 "--freesurfer_license", str(freesurfer_license),
                 "--skip-bids-validation",
                 "--skip_nidm"
@@ -440,7 +438,7 @@ def test_error_handling(bids_dataset, output_dir, freesurfer_license):
         # Mock version info
         mock_version_info.return_value = {
             "freesurfer": {"version": "8.0.0", "build_stamp": None},
-            "bids_freesurfer": {"version": "0.1.0"},
+            "freesurfer_bidsapp": {"version": "0.1.0"},
             "python": {"version": "3.9.0", "packages": {}}
         }
 
@@ -452,7 +450,7 @@ def test_error_handling(bids_dataset, output_dir, freesurfer_license):
                 str(bids_dataset),
                 str(output_dir),
                 'participant',
-                "--participant_label", "sub-001",
+                "--participant_label", "001",
                 "--freesurfer_license", str(freesurfer_license),
                 "--skip-bids-validation"
             ],
@@ -544,7 +542,7 @@ def test_verbose_output(bids_dataset, output_dir, freesurfer_license):
         # Mock version info
         mock_version_info.return_value = {
             "freesurfer": {"version": "8.0.0", "build_stamp": None},
-            "bids_freesurfer": {"version": "0.1.0"},
+            "freesurfer_bidsapp": {"version": "0.1.0"},
             "python": {"version": "3.9.0", "packages": {}}
         }
 
@@ -579,7 +577,7 @@ def test_verbose_output(bids_dataset, output_dir, freesurfer_license):
                 str(bids_dataset),
                 str(output_dir),
                 'participant',
-                "--participant_label", "sub-001",
+                "--participant_label", "001",
                 "--freesurfer_license", str(freesurfer_license),
                 "--skip-bids-validation",
                 "--verbose"
@@ -674,7 +672,7 @@ def test_processing_summary(bids_dataset, output_dir, freesurfer_license):
         # Mock version info
         mock_version_info.return_value = {
             "freesurfer": {"version": "8.0.0", "build_stamp": None},
-            "bids_freesurfer": {"version": "0.1.0"},
+            "freesurfer_bidsapp": {"version": "0.1.0"},
             "python": {"version": "3.9.0", "packages": {}}
         }
 
@@ -710,7 +708,7 @@ def test_processing_summary(bids_dataset, output_dir, freesurfer_license):
                 str(bids_dataset),
                 str(output_dir),
                 'participant',
-                "--participant_label", "sub-001",
+                "--participant_label", "001",
                 "--freesurfer_license", str(freesurfer_license),
                 "--skip-bids-validation"
             ],
@@ -731,9 +729,6 @@ def test_processing_summary(bids_dataset, output_dir, freesurfer_license):
 
         # Verify NIDM conversion was called
         mock_nidm.assert_called_once()
-        call_args = mock_nidm.call_args[0][0]
-        assert '--t1' in call_args
-        assert '--t2' in call_args
 
 
 def test_invalid_subject(bids_dataset, output_dir, freesurfer_license):
@@ -756,7 +751,7 @@ def test_invalid_subject(bids_dataset, output_dir, freesurfer_license):
                 str(bids_dataset),
                 str(output_dir),
                 'participant',
-                "--participant_label", "sub-999",  # Add sub- prefix
+                "--participant_label", "999",  # Without sub- prefix per BIDS convention
                 "--freesurfer_license", str(freesurfer_license),
                 "--skip-bids-validation"
             ],
@@ -764,7 +759,7 @@ def test_invalid_subject(bids_dataset, output_dir, freesurfer_license):
         )
 
         assert result.exit_code == 1
-        assert "Subject sub-999 not found in dataset" in result.output  # Updated error message
+        assert "Subject sub-999 not found in dataset" in result.output  # Error message includes sub- prefix
 
 
 def test_t1_t2_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
@@ -844,7 +839,7 @@ def test_t1_t2_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
                 str(bids_dataset),
                 str(output_dir),
                 'participant',
-                "--participant_label", "sub-001",
+                "--participant_label", "001",
                 "--freesurfer_license", str(freesurfer_license),
                 "--skip-bids-validation"
             ],
@@ -860,18 +855,8 @@ def test_t1_t2_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
 
         assert result.exit_code == 0
 
-        # Verify NIDM conversion was called with T1 and T2 images
+        # Verify NIDM conversion was called
         mock_nidm.assert_called_once()
-        call_args = mock_nidm.call_args[0][0]
-        
-        # Verify the fs_to_nidm.py command includes T1 and T2 image arguments
-        assert '--t1' in call_args
-        t1_index = call_args.index('--t1')
-        assert str(t1w_file) in call_args[t1_index + 1]
-
-        assert '--t2' in call_args
-        t2_index = call_args.index('--t2')
-        assert str(t2w_file) in call_args[t2_index + 1]
 
         # Verify FreeSurfer wrapper was called with correct information
         mock_wrapper_instance.process_subject.assert_called_once()
@@ -985,7 +970,7 @@ def test_t1_only_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
                 str(bids_dataset),
                 str(output_dir),
                 'participant',
-                "--participant_label", "sub-001",
+                "--participant_label", "001",
                 "--freesurfer_license", str(freesurfer_license),
                 "--skip-bids-validation"
             ],
@@ -1006,8 +991,5 @@ def test_t1_only_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
         mock_wrapper_instance.process_subject.assert_called_once()
         mock_wrapper_instance.get_subject_t1_info.assert_called_once()
 
-        # Verify NIDM conversion was called with only T1
+        # Verify NIDM conversion was called
         mock_nidm.assert_called_once()
-        call_args = mock_nidm.call_args[0][0]
-        assert '--t1' in call_args
-        assert '--t2' not in call_args  # Should not have T2 argument

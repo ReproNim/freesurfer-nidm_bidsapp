@@ -32,7 +32,7 @@ logger = logging.getLogger("bids-freesurfer")
 
 def _log_version_info(version_info):
     """Log version information."""
-    logger.info(f"BIDS-FreeSurfer version: {version_info['bids_freesurfer']['version']}")
+    logger.info(f"BIDS-FreeSurfer version: {version_info['freesurfer_bidsapp']['version']}")
     logger.info(f"FreeSurfer version: {version_info['freesurfer']['version']}")
     if version_info["freesurfer"]["build_stamp"]:
         logger.info(f"FreeSurfer build stamp: {version_info['freesurfer']['build_stamp']}")
@@ -121,15 +121,15 @@ def nidm_conversion(
         verbose (bool): Enable verbose output
         nidm_input_dir (Path or None): Optional path to existing NIDM resources
     """
-    # Determine subject directory with session info
+    # Determine subject directory with session info (add sub- prefix for FreeSurfer directory)
     if bids_session is None:
-        fs_subject_id = participant_label
+        fs_subject_id = f"sub-{participant_label}"
     else:
-        fs_subject_id = f"{participant_label}_ses-{bids_session}"
+        fs_subject_id = f"sub-{participant_label}_ses-{bids_session}"
     subject_dir = os.path.join(freesurfer_dir, fs_subject_id)
 
-    # Get T1 and T2 image information
-    t1_info = freesurfer_wrapper.get_subject_t1_info(participant_label, bids_session)
+    # Get T1 and T2 image information (use subject ID with prefix for wrapper)
+    t1_info = freesurfer_wrapper.get_subject_t1_info(fs_subject_id, bids_session)
     t1_images = t1_info.get('T1w_images', [])
     t2_images = t1_info.get('T2w_images', [])
     if not t1_images:
@@ -286,7 +286,7 @@ def process_participant(
     Args:
         bids_dir (str): Path to BIDS root directory
         output_dir (str): Path to output directory
-        participant_label (str): Participant label (without "sub-" prefix)
+        participant_label (str): Participant label (with or without "sub-" prefix)
         freesurfer_license (str): Path to FreeSurfer license file
         skip_bids_validation (bool): Skip BIDS validation
         skip_nidm (bool): Skip NIDM export
@@ -296,16 +296,22 @@ def process_participant(
         bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose
     )
 
-    # Validate that the subject exists (strip "sub-" for BIDS query)
+    # Strip "sub-" prefix if present (BABS may pass it with the prefix)
+    if participant_label.startswith("sub-"):
+        participant_label = participant_label[4:]
+
+    # Validate that the subject exists (participant_label is without "sub-" prefix)
     available_subjects = layout.get_subjects()
-    bids_subject = participant_label[4:]  # Strip "sub-" for BIDS query
-    if bids_subject not in available_subjects:
-        logger.error(f"Subject {participant_label} not found in dataset")
+    if participant_label not in available_subjects:
+        logger.error(f"Subject sub-{participant_label} not found in dataset")
         sys.exit(1)
+
+    # Add sub- prefix for FreeSurfer subject ID
+    fs_subject_id = f"sub-{participant_label}"
 
     # Run participant analysis
     try:
-        success = freesurfer_wrapper.process_subject(participant_label, layout)
+        success = freesurfer_wrapper.process_subject(fs_subject_id, layout)
         # Save processing summary
         summary = freesurfer_wrapper.get_processing_summary()
         summary["version_info"] = version_info
@@ -348,8 +354,8 @@ def process_session(
     Args:
         bids_dir (str): Path to BIDS root directory
         output_dir (str): Path to output directory
-        participant_label (str): Participant label (without "sub-" prefix)
-        session_label (str): Session label (without "ses-" prefix)
+        participant_label (str): Participant label (with or without "sub-" prefix)
+        session_label (str): Session label (with or without "ses-" prefix)
         freesurfer_license (str): Path to FreeSurfer license file
         skip_bids_validation (bool): Skip BIDS validation
         skip_nidm (bool): Skip NIDM export
@@ -359,24 +365,33 @@ def process_session(
         bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose
     )
 
-    # Validate that the subject exists (strip "sub-" for BIDS query)
+    # Strip "sub-" prefix if present (BABS may pass it with the prefix)
+    if participant_label.startswith("sub-"):
+        participant_label = participant_label[4:]
+
+    # Strip "ses-" prefix if present (BABS may pass it with the prefix)
+    if session_label.startswith("ses-"):
+        session_label = session_label[4:]
+
+    # Validate that the subject exists (participant_label is without "sub-" prefix)
     available_subjects = layout.get_subjects()
-    bids_subject = participant_label[4:]  # Strip "sub-" for BIDS query
-    if bids_subject not in available_subjects:
-        logger.error(f"Subject {participant_label} not found in dataset")
+    if participant_label not in available_subjects:
+        logger.error(f"Subject sub-{participant_label} not found in dataset")
         sys.exit(1)
 
-    # Validate that the session exists
-    available_sessions = layout.get_sessions(subject=bids_subject)
-    bids_session = session_label[4:] if session_label.startswith("ses-") else session_label  # Strip "ses-" if present
-    if bids_session not in available_sessions:
-        logger.error(f"Session {session_label} not found for subject {participant_label}")
+    # Validate that the session exists (session_label is without "ses-" prefix)
+    available_sessions = layout.get_sessions(subject=participant_label)
+    if session_label not in available_sessions:
+        logger.error(f"Session ses-{session_label} not found for subject sub-{participant_label}")
         sys.exit(1)
+
+    # Add sub- prefix for FreeSurfer subject ID
+    fs_subject_id = f"sub-{participant_label}"
 
     # Run session-level analysis
     try:
         # Use the enhanced process_subject method with session_label
-        success = freesurfer_wrapper.process_subject(participant_label, layout, session_label=bids_session)
+        success = freesurfer_wrapper.process_subject(fs_subject_id, layout, session_label=session_label)
         # Save processing summary
         summary = freesurfer_wrapper.get_processing_summary()
         summary["version_info"] = version_info
@@ -395,7 +410,7 @@ def process_session(
             freesurfer_dir,
             participant_label,
             freesurfer_wrapper,
-            bids_session,
+            session_label,
             verbose=verbose,
             nidm_input_dir=nidm_input_dir,
         )
@@ -415,12 +430,12 @@ def process_session(
 @click.option(
     "--participant_label",
     "--participant-label",
-    help='The label of the participant to analyze (including "sub-" prefix, e.g., "sub-001").',
+    help='The label of the participant to analyze (with or without "sub-" prefix, e.g., "001" or "sub-001").',
 )
 @click.option(
     "--session_label",
     "--session-label",
-    help='The label of the session to analyze (including "ses-" prefix, e.g., "ses-01"). Only used with "session" analysis level.',
+    help='The label of the session to analyze (with or without "ses-" prefix, e.g., "01" or "ses-01"). Only used with "session" analysis level.',
 )
 @click.option(
     "--freesurfer_license",
