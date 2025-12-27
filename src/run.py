@@ -306,12 +306,20 @@ def process_participant(
         logger.error(f"Subject sub-{participant_label} not found in dataset")
         sys.exit(1)
 
+    # Auto-detect session if input data has exactly one session
+    # This handles BABS workflows where multi-session data is filtered to single session
+    available_sessions = layout.get_sessions(subject=participant_label)
+    detected_session = None
+    if len(available_sessions) == 1:
+        detected_session = available_sessions[0]
+        logger.info(f"Auto-detected session: ses-{detected_session}")
+
     # Add sub- prefix for FreeSurfer subject ID
     fs_subject_id = f"sub-{participant_label}"
 
     # Run participant analysis
     try:
-        success = freesurfer_wrapper.process_subject(fs_subject_id, layout)
+        success = freesurfer_wrapper.process_subject(fs_subject_id, layout, session_label=detected_session)
         # Save processing summary
         summary = freesurfer_wrapper.get_processing_summary()
         summary["version_info"] = version_info
@@ -331,6 +339,7 @@ def process_participant(
             freesurfer_dir,
             participant_label,
             freesurfer_wrapper,
+            bids_session=detected_session,
             verbose=verbose,
             nidm_input_dir=nidm_input_dir,
         )

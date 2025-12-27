@@ -1,4 +1,4 @@
 [submodule "src/segstats_jsonld"]
 	path = src/segstats_jsonld
 	url = https://github.com/yibeichan/segstats_jsonld.git
-	branch = feature/fs-provenance-link
+	branch = simple2

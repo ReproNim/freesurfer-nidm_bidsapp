@@ -3,3 +3,4 @@ click>=8.0.0
 pybids>=0.15.1
 pytest>=7.0.0
 rdflib>=7.0.0
+pynidm==4.2.4
