@@ -1,5 +1,5 @@
 {
-    "freesurfer_bidsapp": {
+    "freesurfer-nidm_bidsapp": {
         "version": "0.1.0",
         "source": "setup.py"
     },

@@ -23,10 +23,12 @@ The app implements:
 
 ### Quick Installation
 
+Fork the repository and clone it locally:
+
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/freesurfer-bidsapp.git
-cd freesurfer-bidsapp
+git clone https://github.com/yourusername/freesurfer-nidm_bidsapp.git
+cd freesurfer-nidm_bidsapp
 ```
 
 # Container Support
@@ -45,7 +47,7 @@ python setup.py docker
 no
 
 # Or build in a custom location
-apptainer build --fakeroot /path/to/output/freesurfer_bidsapp.sif Singularity
+apptainer build --fakeroot /path/to/output/freesurfer-nidm-bidsapp.sif Singularity
 ```
 
 Note: For cluster environments, we use the `--fakeroot` option with Apptainer as it:
@@ -65,7 +67,7 @@ If you encounter permission issues, you may need to:
 docker run -v /path/to/license.txt:/license.txt \
   -v /path/to/bids/data:/data \
   -v /path/to/output:/output \
-  freesurfer_bids_app \
+  freesurfer-nidm-bidsapp \
   --bids_dir /data \
   --output_dir /output
 ```
@@ -76,7 +78,7 @@ docker run -v /path/to/license.txt:/license.txt \
 # Run the container
 apptainer run \
   --bind /path/to/license.txt:/license.txt,/path/to/bids/data:/data,/path/to/output:/output \
-  /path/to/freesurfer_bids_app.sif \
+  /path/to/freesurfer-nidm-bidsapp.sif \
   --bids_dir /data \
   --output_dir /output
 ```
@@ -181,41 +183,44 @@ apptainer run \
 
 ```
 <output_dir>/
-├── dataset_description.json
-├── freesurfer/
-│   ├── dataset_description.json
-│   ├── sub-<participant_label>/
-│   │   ├── ses-<session_label>/  # Optional session directory
-│   │   │   ├── anat/
-│   │   │   │   ├── aparc+aseg.mgz
-│   │   │   │   ├── aseg.mgz
-│   │   │   │   ├── brainmask.mgz
-│   │   │   │   └── T1.mgz
-│   │   │   ├── label/
-│   │   │   ├── stats/
-│   │   │   │   ├── aseg.stats
-│   │   │   │   ├── lh.aparc.stats
-│   │   │   │   └── rh.aparc.stats
-│   │   │   ├── surf/
-│   │   │   │   ├── lh.pial
-│   │   │   │   ├── lh.white
-│   │   │   │   ├── rh.pial
-│   │   │   │   └── rh.white
-│   │   │   └── provenance.json
-│   │   └── anat/  # For single-session data
-│   │       ├── aparc+aseg.mgz
-│   │       ├── aseg.mgz
-│   │       ├── brainmask.mgz
-│   │       └── T1.mgz
-└── nidm/
+└── freesurfer-nidm_bidsapp/
     ├── dataset_description.json
-    └── sub-<participant_label>/
-        ├── ses-<session_label>/  # Optional session directory
-        │   ├── prov.jsonld
-        │   └── prov.ttl
-        ├── prov.jsonld  # For single-session data
-        └── prov.ttl
+    ├── freesurfer/
+    │   ├── dataset_description.json
+    │   ├── sub-<participant_label>/
+    │   │   ├── ses-<session_label>/  # Optional session directory
+    │   │   │   ├── anat/
+    │   │   │   │   ├── aparc+aseg.mgz
+    │   │   │   │   ├── aseg.mgz
+    │   │   │   │   ├── brainmask.mgz
+    │   │   │   │   └── T1.mgz
+    │   │   │   ├── label/
+    │   │   │   ├── stats/
+    │   │   │   │   ├── aseg.stats
+    │   │   │   │   ├── lh.aparc.stats
+    │   │   │   │   └── rh.aparc.stats
+    │   │   │   ├── surf/
+    │   │   │   │   ├── lh.pial
+    │   │   │   │   ├── lh.white
+    │   │   │   │   ├── rh.pial
+    │   │   │   │   └── rh.white
+    │   │   │   └── provenance.json
+    │   │   └── anat/  # For single-session data
+    │   │       ├── aparc+aseg.mgz
+    │   │       ├── aseg.mgz
+    │   │       ├── brainmask.mgz
+    │   │       └── T1.mgz
+    └── nidm/
+        ├── dataset_description.json
+        ├── sub-<participant_label>.ttl
+        └── sub-<participant_label>_ses-<session_label>.ttl
 ```
+
+**Note:** NIDM outputs use a flat directory structure (all .ttl files directly in `nidm/`) rather than hierarchical subject/session folders. Files are named following BIDS conventions:
+- Single-session datasets: `sub-{id}.ttl` (e.g., `sub-01.ttl`)
+- Multi-session datasets: `sub-{id}_ses-{session}.ttl` (e.g., `sub-01_ses-baseline.ttl`)
+
+In BABS workflows, even multi-session datasets process one session at a time, so each job produces one .ttl file with the appropriate session label included in the filename.
 
 ### FreeSurfer Output
 
@@ -227,7 +232,7 @@ The FreeSurfer outputs follow standard FreeSurfer conventions but are organized 
 
 ### NIDM Output
 
-The NIDM outputs are provided in both JSON-LD (`prov.jsonld`) and Turtle (`prov.ttl`) formats, which include:
+The NIDM outputs are provided in Turtle (`.ttl`) format with files named according to BIDS conventions (e.g., `sub-01.ttl`, `sub-01_ses-baseline.ttl`). The output includes:
 
 - Comprehensive version information:
   - FreeSurfer version and source (from base image)

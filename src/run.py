@@ -32,7 +32,7 @@ logger = logging.getLogger("bids-freesurfer")
 
 def _log_version_info(version_info):
     """Log version information."""
-    logger.info(f"BIDS-FreeSurfer version: {version_info['freesurfer_bidsapp']['version']}")
+    logger.info(f"BIDS-FreeSurfer version: {version_info['freesurfer-nidm_bidsapp']['version']}")
     logger.info(f"FreeSurfer version: {version_info['freesurfer']['version']}")
     if version_info["freesurfer"]["build_stamp"]:
         logger.info(f"FreeSurfer build stamp: {version_info['freesurfer']['build_stamp']}")
@@ -43,7 +43,7 @@ def _log_version_info(version_info):
             logger.info(f"  {package}: {version}")
 
 
-def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose):
+def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir=None):
     """Initialize the BIDS-FreeSurfer app.
     Args:
         bids_dir (str): Path to BIDS root directory
@@ -51,16 +51,22 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
         output_dir (str): Path to output directory
         skip_bids_validation (bool): Skip BIDS validation
         verbose (bool): Enable verbose output
+        nidm_input_dir (str or None): Path to existing NIDM directory (defaults to <bids_dir>/../NIDM)
     """
     # Convert paths to Path objects
     bids_dir = Path(bids_dir)
 
-    nidm_input_dir = bids_dir.parent / "NIDM"
+    # Use CLI argument if provided, otherwise default to BABS location
+    if nidm_input_dir is None:
+        nidm_input_dir = bids_dir.parent / "NIDM"
+    else:
+        nidm_input_dir = Path(nidm_input_dir)
+
     if not nidm_input_dir.exists():
         nidm_input_dir = None
 
     # First create the main output directory
-    app_output_dir = Path(output_dir) / "freesurfer_bidsapp"
+    app_output_dir = Path(output_dir) / "freesurfer-nidm_bidsapp"
     freesurfer_dir = app_output_dir / "freesurfer"
     nidm_dir = app_output_dir / "nidm"
 
@@ -255,17 +261,11 @@ def nidm_conversion(
 
     target_base = Path(nidm_dir) / fs_subject_id
     target_ttl = target_base.with_suffix(".ttl")
-    target_jsonld = target_base.with_suffix(".jsonld")
 
     try:
         aggregated_graph.serialize(destination=str(target_ttl), format="turtle")
     except Exception as serialize_error:  # pragma: no cover
         logger.warning(f"Failed to write aggregated TTL output {target_ttl}: {serialize_error}")
-
-    try:
-        aggregated_graph.serialize(destination=str(target_jsonld), format="json-ld", indent=2)
-    except Exception as serialize_error:  # pragma: no cover
-        logger.warning(f"Failed to write aggregated JSON-LD output {target_jsonld}: {serialize_error}")
 
     logger.info("================================")
     logger.info(f"NIDM conversion complete for {fs_subject_id}")
@@ -278,7 +278,9 @@ def process_participant(
     participant_label,
     freesurfer_license,
     skip_bids_validation,
+    skip_freesurfer,
     skip_nidm,
+    nidm_input_dir,
     verbose,
 ):
     """Process a single participant with FreeSurfer.
@@ -289,11 +291,13 @@ def process_participant(
         participant_label (str): Participant label (with or without "sub-" prefix)
         freesurfer_license (str): Path to FreeSurfer license file
         skip_bids_validation (bool): Skip BIDS validation
+        skip_freesurfer (bool): Skip FreeSurfer processing, only run NIDM conversion
         skip_nidm (bool): Skip NIDM export
+        nidm_input_dir (str or None): Path to existing NIDM directory
         verbose (bool): Enable verbose output
     """
     layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, nidm_input_dir, version_info = initialize(
-        bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose
+        bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir
     )
 
     # Strip "sub-" prefix if present (BABS may pass it with the prefix)
@@ -319,15 +323,35 @@ def process_participant(
 
     # Run participant analysis
     try:
-        success = freesurfer_wrapper.process_subject(fs_subject_id, layout, session_label=detected_session)
-        # Save processing summary
-        summary = freesurfer_wrapper.get_processing_summary()
-        summary["version_info"] = version_info
-        freesurfer_wrapper.save_processing_summary(summary)
+        if skip_freesurfer:
+            # Validate that FreeSurfer outputs exist
+            subject_dir = freesurfer_dir / fs_subject_id
+            done_marker = subject_dir / "scripts" / "recon-all.done"
 
-        logger.info("================================")
-        logger.info("Processing complete!")
-        logger.info("================================")
+            if not subject_dir.exists():
+                logger.error(f"Cannot skip FreeSurfer: subject directory not found at {subject_dir}")
+                raise FileNotFoundError(f"FreeSurfer outputs missing for {fs_subject_id}")
+
+            if not done_marker.exists():
+                logger.error(f"Cannot skip FreeSurfer: recon-all not complete for {fs_subject_id}")
+                logger.error(f"Expected completion marker: {done_marker}")
+                raise FileNotFoundError(f"FreeSurfer processing not complete for {fs_subject_id}")
+
+            logger.info("================================")
+            logger.info(f"Skipping FreeSurfer processing for {fs_subject_id} (--skip-freesurfer)")
+            logger.info(f"Using existing outputs at {subject_dir}")
+            logger.info("================================")
+            success = True
+        else:
+            success = freesurfer_wrapper.process_subject(fs_subject_id, layout, session_label=detected_session)
+            # Save processing summary
+            summary = freesurfer_wrapper.get_processing_summary()
+            summary["version_info"] = version_info
+            freesurfer_wrapper.save_processing_summary(summary)
+
+            logger.info("================================")
+            logger.info("Processing complete!")
+            logger.info("================================")
 
     except Exception as e:
         logger.error(f"Error during processing: {str(e)}")
@@ -355,7 +379,9 @@ def process_session(
     session_label,
     freesurfer_license,
     skip_bids_validation,
+    skip_freesurfer,
     skip_nidm,
+    nidm_input_dir,
     verbose,
 ):
     """Process a single session for a participant with FreeSurfer.
@@ -367,11 +393,13 @@ def process_session(
         session_label (str): Session label (with or without "ses-" prefix)
         freesurfer_license (str): Path to FreeSurfer license file
         skip_bids_validation (bool): Skip BIDS validation
+        skip_freesurfer (bool): Skip FreeSurfer processing, only run NIDM conversion
         skip_nidm (bool): Skip NIDM export
+        nidm_input_dir (str or None): Path to existing NIDM directory
         verbose (bool): Enable verbose output
     """
     layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, nidm_input_dir, version_info = initialize(
-        bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose
+        bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir
     )
 
     # Strip "sub-" prefix if present (BABS may pass it with the prefix)
@@ -399,15 +427,36 @@ def process_session(
 
     # Run session-level analysis
     try:
-        # Use the enhanced process_subject method with session_label
-        success = freesurfer_wrapper.process_subject(fs_subject_id, layout, session_label=session_label)
-        # Save processing summary
-        summary = freesurfer_wrapper.get_processing_summary()
-        summary["version_info"] = version_info
-        freesurfer_wrapper.save_processing_summary(summary)
-        logger.info("================================")
-        logger.info("Processing complete!")
-        logger.info("================================")
+        if skip_freesurfer:
+            # Validate that FreeSurfer outputs exist
+            # Note: For multi-session, the subject ID may be modified to include session
+            subject_dir = freesurfer_dir / fs_subject_id
+            done_marker = subject_dir / "scripts" / "recon-all.done"
+
+            if not subject_dir.exists():
+                logger.error(f"Cannot skip FreeSurfer: subject directory not found at {subject_dir}")
+                raise FileNotFoundError(f"FreeSurfer outputs missing for {fs_subject_id}")
+
+            if not done_marker.exists():
+                logger.error(f"Cannot skip FreeSurfer: recon-all not complete for {fs_subject_id}")
+                logger.error(f"Expected completion marker: {done_marker}")
+                raise FileNotFoundError(f"FreeSurfer processing not complete for {fs_subject_id}")
+
+            logger.info("================================")
+            logger.info(f"Skipping FreeSurfer processing for {fs_subject_id} (--skip-freesurfer)")
+            logger.info(f"Using existing outputs at {subject_dir}")
+            logger.info("================================")
+            success = True
+        else:
+            # Use the enhanced process_subject method with session_label
+            success = freesurfer_wrapper.process_subject(fs_subject_id, layout, session_label=session_label)
+            # Save processing summary
+            summary = freesurfer_wrapper.get_processing_summary()
+            summary["version_info"] = version_info
+            freesurfer_wrapper.save_processing_summary(summary)
+            logger.info("================================")
+            logger.info("Processing complete!")
+            logger.info("================================")
 
     except Exception as e:
         logger.error(f"Error during processing: {str(e)}")
@@ -453,7 +502,14 @@ def process_session(
     help="Path to FreeSurfer license file.",
 )
 @click.option("--skip-bids-validation", is_flag=True, help="Skip BIDS validation.")
+@click.option("--skip-freesurfer", is_flag=True, help="Skip FreeSurfer processing, only run NIDM conversion on existing outputs.")
 @click.option("--skip_nidm", "--skip-nidm", is_flag=True, help="Skip NIDM output generation.")
+@click.option(
+    "--nidm-input-dir",
+    type=click.Path(exists=False, file_okay=False, resolve_path=True),
+    default=None,
+    help="Path to existing NIDM files directory. Defaults to <bids_dir>/../NIDM for BABS workflows.",
+)
 @click.option("--verbose", is_flag=True, help="Enable verbose output.")
 def cli(
     bids_dir,
@@ -463,7 +519,9 @@ def cli(
     session_label,
     freesurfer_license,
     skip_bids_validation,
+    skip_freesurfer,
     skip_nidm,
+    nidm_input_dir,
     verbose,
 ):
     """FreeSurfer BIDS App with NIDM Output.
@@ -492,7 +550,9 @@ def cli(
             participant_label,
             freesurfer_license,
             skip_bids_validation,
+            skip_freesurfer,
             skip_nidm,
+            nidm_input_dir,
             verbose,
         )
     elif analysis_level == "session":
@@ -506,7 +566,9 @@ def cli(
             session_label,
             freesurfer_license,
             skip_bids_validation,
+            skip_freesurfer,
             skip_nidm,
+            nidm_input_dir,
             verbose,
         )
 

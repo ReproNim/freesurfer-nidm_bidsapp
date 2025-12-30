@@ -9,7 +9,7 @@ def build_docker():
     """Build Docker container"""
     print("Building Docker image...")
     try:
-        subprocess.run(["docker", "build", "-t", "freesurfer-bidsapp", "."], check=True)
+        subprocess.run(["docker", "build", "-t", "freesurfer-nidm-bidsapp", "."], check=True)
         print("Docker image built successfully")
     except subprocess.CalledProcessError as e:
         print(f"Docker build failed: {e}")
@@ -123,7 +123,7 @@ if len(sys.argv) > 1 and sys.argv[1] in ["docker", "singularity", "containers"]:
 init_git_submodules()
 
 setup(
-    name="freesurfer_bidsapp",
+    name="freesurfer-nidm_bidsapp",
     version="0.1.0",
     description="BIDS App for FreeSurfer with NIDM Output",
     author="ReproNim",
@@ -131,7 +131,7 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     license="MIT",
-    url="https://github.com/ReproNim/freesurfer_bidsapp",
+    url="https://github.com/ReproNim/freesurfer-nidm_bidsapp",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Science/Research",
@@ -144,7 +144,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "freesurfer_bidsapp=src.run:cli",
+            "freesurfer-nidm-bidsapp=src.run:cli",
         ],
     },
     python_requires=">=3.9",

@@ -231,7 +231,7 @@ def test_custom_freesurfer_dir(bids_dataset, output_dir, freesurfer_license):
         json.dump(dataset_description, f)
 
     # Create FreeSurfer output directory structure
-    fs_output_dir = Path(output_dir) / "freesurfer_bidsapp" / "freesurfer"
+    fs_output_dir = Path(output_dir) / "freesurfer-nidm_bidsapp" / "freesurfer"
     fs_subject_dir = fs_output_dir / "sub-001"
     fs_subject_dir.mkdir(parents=True, exist_ok=True)
     (fs_subject_dir / "mri").mkdir(exist_ok=True)
@@ -438,7 +438,7 @@ def test_error_handling(bids_dataset, output_dir, freesurfer_license):
         # Mock version info
         mock_version_info.return_value = {
             "freesurfer": {"version": "8.0.0", "build_stamp": None},
-            "freesurfer_bidsapp": {"version": "0.1.0"},
+            "freesurfer-nidm_bidsapp": {"version": "0.1.0"},
             "python": {"version": "3.9.0", "packages": {}}
         }
 
@@ -488,7 +488,7 @@ def test_verbose_output(bids_dataset, output_dir, freesurfer_license):
         json.dump(dataset_description, f)
 
     # Create FreeSurfer output directory structure
-    fs_output_dir = Path(output_dir) / "freesurfer_bidsapp" / "freesurfer"
+    fs_output_dir = Path(output_dir) / "freesurfer-nidm_bidsapp" / "freesurfer"
     fs_subject_dir = fs_output_dir / "sub-001"
     fs_subject_dir.mkdir(parents=True, exist_ok=True)
     (fs_subject_dir / "mri").mkdir(exist_ok=True)
@@ -542,7 +542,7 @@ def test_verbose_output(bids_dataset, output_dir, freesurfer_license):
         # Mock version info
         mock_version_info.return_value = {
             "freesurfer": {"version": "8.0.0", "build_stamp": None},
-            "freesurfer_bidsapp": {"version": "0.1.0"},
+            "freesurfer-nidm_bidsapp": {"version": "0.1.0"},
             "python": {"version": "3.9.0", "packages": {}}
         }
 
@@ -619,7 +619,7 @@ def test_processing_summary(bids_dataset, output_dir, freesurfer_license):
         json.dump(dataset_description, f)
 
     # Create FreeSurfer output directory structure
-    fs_output_dir = Path(output_dir) / "freesurfer_bidsapp" / "freesurfer"
+    fs_output_dir = Path(output_dir) / "freesurfer-nidm_bidsapp" / "freesurfer"
     fs_subject_dir = fs_output_dir / "sub-001"
     fs_subject_dir.mkdir(parents=True, exist_ok=True)
     (fs_subject_dir / "mri").mkdir(exist_ok=True)
@@ -672,7 +672,7 @@ def test_processing_summary(bids_dataset, output_dir, freesurfer_license):
         # Mock version info
         mock_version_info.return_value = {
             "freesurfer": {"version": "8.0.0", "build_stamp": None},
-            "freesurfer_bidsapp": {"version": "0.1.0"},
+            "freesurfer-nidm_bidsapp": {"version": "0.1.0"},
             "python": {"version": "3.9.0", "packages": {}}
         }
 
@@ -803,7 +803,7 @@ def test_t1_t2_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
         mock_wrapper_instance = MagicMock()
         def mock_process_subject(subject_label, *args, **kwargs):
             # Create the FreeSurfer subject directory structure
-            fs_dir = Path(output_dir) / "freesurfer_bidsapp" / "freesurfer"
+            fs_dir = Path(output_dir) / "freesurfer-nidm_bidsapp" / "freesurfer"
             subject_dir = fs_dir / subject_label
             subject_dir.mkdir(parents=True, exist_ok=True)
             # Create some dummy FreeSurfer files
@@ -863,7 +863,7 @@ def test_t1_t2_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
         mock_wrapper_instance.get_subject_t1_info.assert_called_once()
 
         # Verify FreeSurfer directory structure was created
-        fs_dir = Path(output_dir) / "freesurfer_bidsapp" / "freesurfer" / "sub-001"
+        fs_dir = Path(output_dir) / "freesurfer-nidm_bidsapp" / "freesurfer" / "sub-001"
         assert fs_dir.exists()
         assert (fs_dir / "mri").exists()
         assert (fs_dir / "surf").exists()
@@ -892,7 +892,7 @@ def test_t1_only_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
         json.dump(dataset_description, f)
 
     # Create FreeSurfer output directory structure
-    fs_output_dir = Path(output_dir) / "freesurfer_bidsapp" / "freesurfer"
+    fs_output_dir = Path(output_dir) / "freesurfer-nidm_bidsapp" / "freesurfer"
     fs_subject_dir = fs_output_dir / "sub-001"
     fs_subject_dir.mkdir(parents=True, exist_ok=True)
     (fs_subject_dir / "mri").mkdir(exist_ok=True)

@@ -339,8 +339,8 @@ class FreeSurferWrapper:
                             "Description": "FreeSurfer cortical reconstruction and parcellation"
                         },
                         {
-                            "Name": "freesurfer-bidsapp",
-                            "Version": version_info.get("freesurfer_bidsapp", {}).get("version", "unknown"),
+                            "Name": "freesurfer-nidm-bidsapp",
+                            "Version": version_info.get("freesurfer-nidm_bidsapp", {}).get("version", "unknown"),
                             "Description": "BIDS App for FreeSurfer with NIDM Output"
                         }
                     ]
