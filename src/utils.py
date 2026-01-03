@@ -53,8 +53,8 @@ def get_app_version():
             with open(version_path) as f:
                 data = json.load(f)
                 return data.get("freesurfer-nidm", {}).get("version", "unknown")
-    except Exception:
-        pass
+    except Exception as e:
+        logging.warning(f"Failed to get application version from VERSION file: {e}")
     return "unknown"
 
 
