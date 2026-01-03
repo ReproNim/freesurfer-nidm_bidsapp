@@ -188,7 +188,7 @@ class TestOptionalFlags:
              patch('src.run.subprocess.run') as mock_subprocess:
             mock_wrapper.return_value.process_subject.return_value = True
 
-            result = runner.invoke(cli, [
+            runner.invoke(cli, [
                 str(bids_single_session),
                 str(output_dir),
                 'participant',
