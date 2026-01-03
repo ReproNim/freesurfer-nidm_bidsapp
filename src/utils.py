@@ -188,7 +188,7 @@ def get_version_info():
         Dictionary containing version information for all components
     """
     version_info = {
-        "freesurfer-nidm_bidsapp": {
+        "freesurfer-nidm": {
             "version": "unknown",
             "source": "package",
             "timestamp": datetime.datetime.now().isoformat()
@@ -211,9 +211,9 @@ def get_version_info():
         if version_path.exists():
             with open(version_path, "r") as f:
                 version_data = json.load(f)
-                # Update freesurfer-nidm_bidsapp version
-                if "freesurfer-nidm_bidsapp" in version_data:
-                    version_info["freesurfer-nidm_bidsapp"].update(version_data["freesurfer-nidm_bidsapp"])
+                # Update freesurfer-nidm version
+                if "freesurfer-nidm" in version_data:
+                    version_info["freesurfer-nidm"].update(version_data["freesurfer-nidm"])
                 # Update freesurfer version
                 if "freesurfer" in version_data:
                     version_info["freesurfer"].update(version_data["freesurfer"])
@@ -231,22 +231,22 @@ def get_version_info():
                         # Handle both version="..." and version=__version__
                         version = line.strip().split('=')[1].strip().strip(',').strip('"')
                         if version != "__version__":
-                            version_info["freesurfer-nidm_bidsapp"]["version"] = version
-                        version_info["freesurfer-nidm_bidsapp"]["source"] = "setup.py"
+                            version_info["freesurfer-nidm"]["version"] = version
+                        version_info["freesurfer-nidm"]["source"] = "setup.py"
                         break
     except Exception as e:
         logging.warning(f"Failed to read setup.py: {str(e)}")
 
     # Fallback to package version if setup.py not available
-    if version_info["freesurfer-nidm_bidsapp"]["version"] == "unknown":
+    if version_info["freesurfer-nidm"]["version"] == "unknown":
         try:
             from importlib.metadata import version
-            version_info["freesurfer-nidm_bidsapp"]["version"] = version("freesurfer-nidm")
-            version_info["freesurfer-nidm_bidsapp"]["source"] = "package"
+            version_info["freesurfer-nidm"]["version"] = version("freesurfer-nidm")
+            version_info["freesurfer-nidm"]["source"] = "package"
         except ImportError:
             try:
                 from pkg_resources import get_distribution
-                version_info["freesurfer-nidm_bidsapp"]["version"] = get_distribution("freesurfer-nidm").version
+                version_info["freesurfer-nidm"]["version"] = get_distribution("freesurfer-nidm").version
             except Exception:
                 pass
 

@@ -438,7 +438,7 @@ def test_error_handling(bids_dataset, output_dir, freesurfer_license):
         # Mock version info
         mock_version_info.return_value = {
             "freesurfer": {"version": "8.0.0", "build_stamp": None},
-            "freesurfer-nidm_bidsapp": {"version": "0.1.0"},
+            "freesurfer-nidm": {"version": "0.1.0"},
             "python": {"version": "3.9.0", "packages": {}}
         }
 
@@ -542,7 +542,7 @@ def test_verbose_output(bids_dataset, output_dir, freesurfer_license):
         # Mock version info
         mock_version_info.return_value = {
             "freesurfer": {"version": "8.0.0", "build_stamp": None},
-            "freesurfer-nidm_bidsapp": {"version": "0.1.0"},
+            "freesurfer-nidm": {"version": "0.1.0"},
             "python": {"version": "3.9.0", "packages": {}}
         }
 
@@ -672,7 +672,7 @@ def test_processing_summary(bids_dataset, output_dir, freesurfer_license):
         # Mock version info
         mock_version_info.return_value = {
             "freesurfer": {"version": "8.0.0", "build_stamp": None},
-            "freesurfer-nidm_bidsapp": {"version": "0.1.0"},
+            "freesurfer-nidm": {"version": "0.1.0"},
             "python": {"version": "3.9.0", "packages": {}}
         }
 
