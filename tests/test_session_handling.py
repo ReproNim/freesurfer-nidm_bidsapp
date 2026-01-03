@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for session handling in single and multi-session datasets."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from click.testing import CliRunner
 
 from src.run import cli
