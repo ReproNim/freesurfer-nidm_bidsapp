@@ -2,7 +2,6 @@
 """Tests for session handling in single and multi-session datasets."""
 
 import pytest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
