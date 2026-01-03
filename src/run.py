@@ -17,22 +17,22 @@ import click
 
 from bids import BIDSLayout
 from src.freesurfer.wrapper import FreeSurferWrapper
-from src.utils import get_version_info, setup_logging
+from src.utils import get_app_version, get_version_info, setup_logging
 from rdflib import Graph
 
 try:
     from importlib.metadata import version
 
-    __version__ = version("bids-freesurfer")
+    __version__ = version("freesurfer-nidm")
 except ImportError:
-    __version__ = "0.1.0"
+    __version__ = get_app_version()
 
-logger = logging.getLogger("bids-freesurfer")
+logger = logging.getLogger("freesurfer-nidm")
 
 
 def _log_version_info(version_info):
     """Log version information."""
-    logger.info(f"BIDS-FreeSurfer version: {version_info['freesurfer-nidm_bidsapp']['version']}")
+    logger.info(f"BIDS-FreeSurfer version: {version_info['freesurfer-nidm']['version']}")
     logger.info(f"FreeSurfer version: {version_info['freesurfer']['version']}")
     if version_info["freesurfer"]["build_stamp"]:
         logger.info(f"FreeSurfer build stamp: {version_info['freesurfer']['build_stamp']}")

@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -5,11 +6,24 @@ from pathlib import Path
 from setuptools import find_packages, setup
 
 
+def get_version_from_file():
+    """Get version from VERSION file."""
+    version_path = Path(__file__).parent / "VERSION"
+    if version_path.exists():
+        with open(version_path) as f:
+            data = json.load(f)
+            return data.get("freesurfer-nidm_bidsapp", {}).get("version", "0.1.0")
+    return "0.1.0"
+
+
+__version__ = get_version_from_file()
+
+
 def build_docker():
     """Build Docker container"""
     print("Building Docker image...")
     try:
-        subprocess.run(["docker", "build", "-t", "freesurfer-nidm-bidsapp", "."], check=True)
+        subprocess.run(["docker", "build", "-t", "freesurfer-nidm", "."], check=True)
         print("Docker image built successfully")
     except subprocess.CalledProcessError as e:
         print(f"Docker build failed: {e}")
@@ -123,15 +137,15 @@ if len(sys.argv) > 1 and sys.argv[1] in ["docker", "singularity", "containers"]:
 init_git_submodules()
 
 setup(
-    name="freesurfer-nidm_bidsapp",
-    version="0.1.0",
+    name="freesurfer-nidm",
+    version=__version__,
     description="BIDS App for FreeSurfer with NIDM Output",
     author="ReproNim",
     author_email="repronim@gmail.com",
     packages=find_packages(),
     include_package_data=True,
     license="MIT",
-    url="https://github.com/ReproNim/freesurfer-nidm_bidsapp",
+    url="https://github.com/sensein/freesurfer_bidsapp",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Science/Research",
@@ -144,7 +158,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "freesurfer-nidm-bidsapp=src.run:cli",
+            "freesurfer-nidm=src.run:cli",
         ],
     },
     python_requires=">=3.9",

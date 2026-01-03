@@ -48,17 +48,18 @@ From: vnmd/freesurfer_8.0.0
     python3 /opt/src/run.py "$@"
 
 %help
-    FreeSurfer BIDS App 0.1.0
+    FreeSurfer BIDS App with NIDM Output
 
     This container is designed to work with BABS.
 
-    Version Information:
-    - BIDS-FreeSurfer: 0.1.0
-    - FreeSurfer: 8.0.0
-    - Base Image: vnmd/freesurfer_8.0.0
+    For version information, run:
+      singularity run [container] --version
+
+    For full usage information, run:
+      singularity run [container] --help
 
     Usage:
       singularity run -B [workdir] -B [license.txt]:/SGLR/FREESURFER_HOME/license.txt [container] [input_dir] [output_dir] participant --fs-license-file /SGLR/FREESURFER_HOME/license.txt [options]
 
     Example:
-      singularity run -B $PWD -B license.txt:/SGLR/FREESURFER_HOME/license.txt freesurfer_bids_app.sif $PWD/inputs/data/BIDS $PWD/outputs/freesurfer participant --fs-license-file /SGLR/FREESURFER_HOME/license.txt --skip-bids-validation
+      singularity run -B $PWD -B license.txt:/SGLR/FREESURFER_HOME/license.txt freesurfer-nidm.sif $PWD/inputs/data/BIDS $PWD/outputs/freesurfer participant --fs-license-file /SGLR/FREESURFER_HOME/license.txt --skip-bids-validation

@@ -4,7 +4,9 @@ A BIDS App implementation for FreeSurfer 8.0.0 that provides standardized surfac
 
 ## Description
 
-This BIDS App runs FreeSurfer's `recon-all` pipeline on structural T1w and (optionally) T2w images from a BIDS-valid dataset. It organizes outputs in a BIDS-compliant derivatives structure and provides additional NIDM format outputs for improved interoperability.
+This BIDS App runs **only** FreeSurfer's `recon-all` pipeline on structural T1w and (optionally) T2w images from a BIDS-valid dataset. It organizes outputs in a BIDS-compliant derivatives structure and provides additional NIDM format outputs for improved interoperability.
+
+**Important Note:** This app is designed to run the complete `recon-all` cortical reconstruction pipeline. It does not provide access to other FreeSurfer command-line tools (e.g., `tkmedit`, `tksurfer`, `mri_vol2vol`, etc.). For interactive FreeSurfer tools or additional analyses, you will need a full FreeSurfer installation.
 
 The app implements:
 1. Automatic identification and processing of T1w images (required)
@@ -134,8 +136,10 @@ Note: We no longer need to bind the repository directory since all required file
   - `--session_label`: The label(s) of the session(s) to analyze (without "ses-" prefix)
   - `--freesurfer_license`: Path to FreeSurfer license file
   - `--skip_bids_validator`: Skip BIDS validation
-  - `--fs_options`: Additional options to pass to recon-all (e.g., "-parallel -openmp 4")
+  - `--fs_options`: Additional options to pass to `recon-all` only (e.g., "-parallel -openmp 4")
   - `--skip_nidm`: Skip NIDM output generation
+
+**Note:** The `--fs_options` parameter only accepts `recon-all` specific options. This app does not expose other FreeSurfer commands or tools.
 
 ### Examples
 
