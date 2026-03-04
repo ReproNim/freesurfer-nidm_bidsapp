@@ -28,11 +28,11 @@ The app implements:
 Clone the repository (including submodules) using SSH:
 
 ```bash
-git clone -r git@github.com:ReproNim/freesurfer-nidm_bidsapp.git
+git clone --recursive git@github.com:ReproNim/freesurfer-nidm_bidsapp.git
 cd freesurfer-nidm_bidsapp
 ```
 
-> **Note:** The `-r` flag is required to also clone the git submodules used by this project (e.g., `src/segstats_jsonld`).
+> **Note:** The `--recursive` flag is required to also clone the git submodules used by this project (e.g., `src/segstats_jsonld`).
 
 ## Container Support
 
