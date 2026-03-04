@@ -25,42 +25,33 @@ The app implements:
 
 ### Quick Installation
 
-Fork the repository and clone it locally:
+Clone the repository (including submodules) using SSH:
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/freesurfer-nidm_bidsapp.git
+git clone --recursive git@github.com:ReproNim/freesurfer-nidm_bidsapp.git
 cd freesurfer-nidm_bidsapp
 ```
 
-# Container Support
+> **Note:** The `--recursive` flag is required to also clone the git submodules used by this project (e.g., `src/segstats_jsonld`).
 
-This BIDS App provides support for both Docker and Singularity/Apptainer, allowing you to run the application in various environments including HPC clusters.
+## Container Support
+
+This BIDS App supports both Docker and Singularity/Apptainer, allowing you to run the application in various environments including HPC clusters.
 
 ## Building Containers
-
-You can build the container images using these commands:
 
 ```bash
 # Build Docker image (for local development)
 python setup.py docker
 
-# Build Singularity/Apptainer image on clusters
-no
+# Build Singularity/Apptainer image (e.g., on a cluster)
+apptainer build --fakeroot freesurfer-nidm-bidsapp.sif Singularity
 
-# Or build in a custom location
+# Or specify a custom output location
 apptainer build --fakeroot /path/to/output/freesurfer-nidm-bidsapp.sif Singularity
 ```
 
-Note: For cluster environments, we use the `--fakeroot` option with Apptainer as it:
-1. Avoids permission issues common on shared systems
-2. Doesn't require root privileges
-3. Is specifically designed for HPC/cluster environments
-
-If you encounter permission issues, you may need to:
-1. Check if your user is configured for fakeroot (contact your system administrator)
-2. Ensure you have proper permissions in the build directory
-3. Try building in a directory where you have write permissions
+> **Note:** The `--fakeroot` option is recommended for cluster environments because it avoids permission issues on shared systems and does not require root privileges. If you encounter issues, contact your system administrator to ensure your user is configured for fakeroot, and make sure you have write permissions in the build directory.
 
 ## Docker Usage
 
@@ -89,15 +80,7 @@ Note: The application files are included in the container image, so there's no n
 
 ## HPC/Cluster Usage
 
-When running on an HPC cluster that uses Apptainer:
-
-1. Build the container image:
-   ```bash
-   apptainer build --fakeroot freesurfer.sif Singularity
-   ```
-   Note: If you encounter permission issues, ensure your user is configured for fakeroot (contact your system administrator).
-
-2. Create a job submission script like this:
+After building the Singularity/Apptainer image (see [Building Containers](#building-containers)), create a job submission script like this:
 
 ```bash
 #!/bin/bash
@@ -121,8 +104,6 @@ apptainer run \
   --output_dir /output \
   --participant_label sub-01 sub-02  # Add your subjects here
 ```
-
-Note: We no longer need to bind the repository directory since all required files are now included in the container image.
 
 ### Command-Line Arguments
 
@@ -185,52 +166,73 @@ apptainer run \
 
 ### Output Directory Structure
 
+The container writes all results under a single `freesurfer-nidm_bidsapp/` subdirectory inside the specified `output_dir`. There are three sub-trees: BIDS-organised derivatives, the raw FreeSurfer `SUBJECTS_DIR`, and the NIDM Turtle files.
+
 ```
 <output_dir>/
 └── freesurfer-nidm_bidsapp/
-    ├── dataset_description.json
-    ├── freesurfer/
-    │   ├── dataset_description.json
-    │   ├── sub-<participant_label>/
-    │   │   ├── ses-<session_label>/  # Optional session directory
-    │   │   │   ├── anat/
-    │   │   │   │   ├── aparc+aseg.mgz
-    │   │   │   │   ├── aseg.mgz
-    │   │   │   │   ├── brainmask.mgz
-    │   │   │   │   └── T1.mgz
-    │   │   │   ├── label/
-    │   │   │   ├── stats/
-    │   │   │   │   ├── aseg.stats
-    │   │   │   │   ├── lh.aparc.stats
-    │   │   │   │   └── rh.aparc.stats
-    │   │   │   ├── surf/
-    │   │   │   │   ├── lh.pial
-    │   │   │   │   ├── lh.white
-    │   │   │   │   ├── rh.pial
-    │   │   │   │   └── rh.white
-    │   │   │   └── provenance.json
-    │   │   └── anat/  # For single-session data
-    │   │       ├── aparc+aseg.mgz
-    │   │       ├── aseg.mgz
-    │   │       ├── brainmask.mgz
-    │   │       └── T1.mgz
-    └── nidm/
-        ├── dataset_description.json
-        ├── sub-<participant_label>.ttl
-        └── sub-<participant_label>_ses-<session_label>.ttl
+    ├── dataset_description.json          # BIDS derivative dataset description
+    ├── README                            # Auto-generated derivatives readme
+    │
+    ├── sub-<id>/                         # BIDS-organised derivatives (single-session)
+    │   ├── anat/
+    │   │   ├── sub-<id>_desc-brain_T1w.nii.gz
+    │   │   ├── sub-<id>_desc-aparcaseg_dseg.nii.gz
+    │   │   └── sub-<id>_desc-wmparc_dseg.nii.gz
+    │   └── stats/
+    │       ├── sub-<id>_aseg.stats
+    │       ├── sub-<id>_lh.aparc.stats
+    │       └── sub-<id>_rh.aparc.stats
+    │
+    ├── sub-<id>/                         # BIDS-organised derivatives (multi-session)
+    │   └── ses-<session>/
+    │       ├── anat/
+    │       │   ├── sub-<id>_ses-<session>_desc-brain_T1w.nii.gz
+    │       │   ├── sub-<id>_ses-<session>_desc-aparcaseg_dseg.nii.gz
+    │       │   └── sub-<id>_ses-<session>_desc-wmparc_dseg.nii.gz
+    │       └── stats/
+    │           ├── sub-<id>_ses-<session>_aseg.stats
+    │           ├── sub-<id>_ses-<session>_lh.aparc.stats
+    │           └── sub-<id>_ses-<session>_rh.aparc.stats
+    │
+    ├── freesurfer/                       # Raw FreeSurfer SUBJECTS_DIR
+    │   ├── processing_summary.json       # Per-run processing summary with version info
+    │   └── sub-<id>[_ses-<session>]/     # Standard recon-all output directory
+    │       ├── mri/
+    │       │   ├── brain.mgz
+    │       │   ├── aparc.DKTatlas+aseg.mgz
+    │       │   └── wmparc.mgz
+    │       ├── surf/
+    │       │   ├── lh.pial
+    │       │   ├── lh.white
+    │       │   ├── rh.pial
+    │       │   └── rh.white
+    │       ├── label/
+    │       ├── stats/
+    │       │   ├── aseg.stats
+    │       │   ├── lh.aparc.stats
+    │       │   └── rh.aparc.stats
+    │       └── scripts/
+    │           └── recon-all.done        # Completion marker
+    │
+    └── nidm/                             # NIDM Turtle outputs (flat structure)
+        ├── sub-<id>.ttl                  # Single-session dataset
+        └── sub-<id>_ses-<session>.ttl    # Multi-session dataset
 ```
 
-**Note:** NIDM outputs use a flat directory structure (all .ttl files directly in `nidm/`) rather than hierarchical subject/session folders. Files are named following BIDS conventions:
-- Single-session datasets: `sub-{id}.ttl` (e.g., `sub-01.ttl`)
-- Multi-session datasets: `sub-{id}_ses-{session}.ttl` (e.g., `sub-01_ses-baseline.ttl`)
-
-In BABS workflows, even multi-session datasets process one session at a time, so each job produces one .ttl file with the appropriate session label included in the filename.
+**Notes:**
+- BIDS-organised derivative files use BIDS-compliant naming (e.g., `_desc-brain_T1w.nii.gz`, `_desc-aparcaseg_dseg.nii.gz`) and are placed directly under `freesurfer-nidm_bidsapp/sub-<id>/`.
+- The `freesurfer/sub-<id>[_ses-<session>]/` directory is the standard FreeSurfer subject directory created by `recon-all` and contains the full set of recon-all outputs.
+- For multi-session datasets the FreeSurfer subject ID is `sub-<id>_ses-<session>` (e.g. `sub-01_ses-baseline`).
+- NIDM outputs use a flat directory structure (all `.ttl` files directly in `nidm/`). In BABS workflows each job produces one `.ttl` file named after the subject (and session if applicable).
 
 ### FreeSurfer Output
 
-The FreeSurfer outputs follow standard FreeSurfer conventions but are organized in a BIDS-compliant directory structure. Key output files include:
+The `freesurfer/` subdirectory is the FreeSurfer `SUBJECTS_DIR`. Key files copied into the BIDS-organised tree include:
 
-- Segmentation volumes (`aparc+aseg.mgz`, `aseg.mgz`)
+- Brain-extracted T1w (`brain.mgz` → `sub-<id>_desc-brain_T1w.nii.gz`)
+- Cortical parcellation (`aparc.DKTatlas+aseg.mgz` → `sub-<id>_desc-aparcaseg_dseg.nii.gz`)
+- White-matter parcellation (`wmparc.mgz` → `sub-<id>_desc-wmparc_dseg.nii.gz`)
 - Surface meshes (`lh.white`, `rh.white`, `lh.pial`, `rh.pial`)
 - Statistical measures (`aseg.stats`, `lh.aparc.stats`, `rh.aparc.stats`)
 
