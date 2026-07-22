@@ -134,8 +134,9 @@ def nidm_conversion(
         fs_subject_id = f"sub-{participant_label}_ses-{bids_session}"
     subject_dir = os.path.join(freesurfer_dir, fs_subject_id)
 
-    # Get T1 and T2 image information (use subject ID with prefix for wrapper)
-    t1_info = freesurfer_wrapper.get_subject_t1_info(fs_subject_id, bids_session)
+    # Get T1 and T2 image information. The mapping is keyed by the base subject
+    # ID plus session, so pass those separately rather than the combined ID.
+    t1_info = freesurfer_wrapper.get_subject_t1_info(f"sub-{participant_label}", bids_session)
     t1_images = t1_info.get('T1w_images', [])
     t2_images = t1_info.get('T2w_images', [])
     if not t1_images:
@@ -327,6 +328,15 @@ def process_participant(
         # standard BIDS App positional analysis level, "participant".
         detected_session = available_sessions[0]
         logger.info(f"Auto-detected session: ses-{detected_session}")
+    elif len(available_sessions) > 1:
+        # Refuse to guess: without a session, the wrapper would glob T1w images
+        # across every session into a single recon-all run.
+        logger.error(
+            f"Subject sub-{participant_label} has multiple sessions "
+            f"({', '.join('ses-' + s for s in available_sessions)}); "
+            "specify one with --session-label"
+        )
+        sys.exit(1)
 
     # Add sub- prefix for FreeSurfer subject ID
     fs_subject_id = f"sub-{participant_label}"
@@ -354,6 +364,7 @@ def process_participant(
             logger.info(f"Skipping FreeSurfer processing for {fs_output_subject_id} (--skip-freesurfer)")
             logger.info(f"Using existing outputs at {subject_dir}")
             logger.info("================================")
+            freesurfer_wrapper.record_subject_images(fs_subject_id, layout, session_label=detected_session)
             success = True
         else:
             success = freesurfer_wrapper.process_subject(fs_subject_id, layout, session_label=detected_session)
@@ -459,6 +470,7 @@ def process_session(
             logger.info(f"Skipping FreeSurfer processing for {fs_output_subject_id} (--skip-freesurfer)")
             logger.info(f"Using existing outputs at {subject_dir}")
             logger.info("================================")
+            freesurfer_wrapper.record_subject_images(fs_subject_id, layout, session_label=session_label)
             success = True
         else:
             # Use the enhanced process_subject method with session_label

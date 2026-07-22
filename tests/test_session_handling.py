@@ -344,6 +344,28 @@ class TestBABSIntegration:
         assert result.exit_code != 0
         mock_wrapper.return_value.process_subject.assert_not_called()
 
+    def test_multi_session_requires_explicit_label(self, tmp_path, bids_multi_session):
+        """Participant mode must not guess when a subject has multiple sessions."""
+        output_dir = tmp_path / "output"
+
+        runner = CliRunner()
+        with patch("src.run.FreeSurferWrapper") as mock_wrapper:
+            result = runner.invoke(
+                cli,
+                [
+                    str(bids_multi_session),
+                    str(output_dir),
+                    "participant",
+                    "--participant-label",
+                    "001",
+                    "--skip-nidm",
+                    "--skip-bids-validation",
+                ],
+            )
+
+        assert result.exit_code != 0
+        mock_wrapper.return_value.process_subject.assert_not_called()
+
 
 class TestSessionValidation:
     """Test session label validation."""
