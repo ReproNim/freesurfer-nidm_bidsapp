@@ -386,6 +386,47 @@ For more information about FreeSurfer, visit: http://surfer.nmr.mgh.harvard.edu/
         logger.info(f"Processing summary saved to {output_path}")
         return output_path
 
+    def record_subject_images(self, subject_id, layout, session_label=None):
+        """Record T1w/T2w provenance without running recon-all.
+
+        Used by --skip-freesurfer so that NIDM export logging reflects the
+        images of a previously reconstructed subject/session.
+
+        Parameters
+        ----------
+        subject_id : str
+            Subject ID (including 'sub-' prefix)
+        layout : BIDSLayout
+            BIDS layout object
+        session_label : str, optional
+            Session label (with or without 'ses-' prefix)
+
+        Returns
+        -------
+        dict
+            The recorded image information.
+        """
+        if not subject_id.startswith("sub-"):
+            raise ValueError(f"Subject ID must start with 'sub-', got {subject_id}")
+
+        bids_subject = subject_id[4:]
+        bids_session = session_label
+        if bids_session and bids_session.startswith("ses-"):
+            bids_session = bids_session[4:]
+
+        fs_subject_id = f"{subject_id}_ses-{bids_session}" if bids_session else subject_id
+        t1w_images = self._find_images(layout, bids_subject, "T1w", bids_session)
+        info = {
+            "T1w_images": [str(img) for img in t1w_images],
+            "session": bids_session,
+        }
+        t2w_images = self._find_images(layout, bids_subject, "T2w", bids_session)
+        if t2w_images:
+            info["T2w_images"] = [str(img) for img in t2w_images]
+
+        self.subject_t1_mapping[fs_subject_id] = info
+        return info
+
     def get_subject_t1_info(self, subject_id, session_label=None):
         """Get T1 image information for a subject.
 
