@@ -74,7 +74,7 @@ class TestMultiSessionDataset:
     """Test behavior with multi-session datasets."""
 
     def test_multi_session_processing(self, tmp_path, bids_multi_session):
-        """Verify multi-session dataset is processed correctly."""
+        """Verify participant mode honors an explicit BABS session label."""
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
@@ -89,11 +89,16 @@ class TestMultiSessionDataset:
                 'participant',
                 '--participant-label', '001',
                 '--session-label', 'baseline',
+                '--skip-nidm',
                 '--skip-bids-validation'
             ])
 
-            # Verify wrapper was called
-            assert mock_wrapper.called
+            assert result.exit_code == 0, result.output
+            mock_wrapper.return_value.process_subject.assert_called_once()
+            assert (
+                mock_wrapper.return_value.process_subject.call_args.kwargs["session_label"]
+                == "baseline"
+            )
 
     def test_nidm_naming_multi_session(self, tmp_path):
         """Verify NIDM file is named sub-XXX_ses-YY.ttl for multi-session."""
@@ -166,11 +171,15 @@ class TestSessionPrefixHandling:
                 'participant',
                 '--participant-label', '001',
                 '--session-label', 'ses-baseline',
+                '--skip-nidm',
                 '--skip-bids-validation'
             ])
 
-            # Should work with ses- prefix
-            assert mock_wrapper.called
+            assert result.exit_code == 0, result.output
+            assert (
+                mock_wrapper.return_value.process_subject.call_args.kwargs["session_label"]
+                == "baseline"
+            )
 
     def test_accept_session_without_prefix(self, tmp_path, bids_multi_session):
         """Verify YY (no prefix) works correctly."""
@@ -275,6 +284,65 @@ class TestBABSIntegration:
             # Should find NIDM at default BABS location
             assert expected_nidm_dir.exists()
             assert (expected_nidm_dir / "nidm.ttl").exists()
+
+    def test_participant_skip_freesurfer_uses_session_directory(self, tmp_path, bids_multi_session):
+        """Verify a BABS participant invocation resumes the requested session."""
+        output_dir = tmp_path / "output"
+        done_marker = (
+            output_dir
+            / "freesurfer-nidm_bidsapp"
+            / "freesurfer"
+            / "sub-001_ses-baseline"
+            / "scripts"
+            / "recon-all.done"
+        )
+        done_marker.parent.mkdir(parents=True)
+        done_marker.touch()
+
+        runner = CliRunner()
+        with patch("src.run.FreeSurferWrapper") as mock_wrapper:
+            result = runner.invoke(
+                cli,
+                [
+                    str(bids_multi_session),
+                    str(output_dir),
+                    "participant",
+                    "--participant-label",
+                    "001",
+                    "--session-label",
+                    "baseline",
+                    "--skip-freesurfer",
+                    "--skip-nidm",
+                    "--skip-bids-validation",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        mock_wrapper.return_value.process_subject.assert_not_called()
+
+    def test_explicit_session_must_exist(self, tmp_path, bids_multi_session):
+        """Reject an explicit session instead of silently processing all sessions."""
+        output_dir = tmp_path / "output"
+
+        runner = CliRunner()
+        with patch("src.run.FreeSurferWrapper") as mock_wrapper:
+            result = runner.invoke(
+                cli,
+                [
+                    str(bids_multi_session),
+                    str(output_dir),
+                    "participant",
+                    "--participant-label",
+                    "001",
+                    "--session-label",
+                    "missing",
+                    "--skip-nidm",
+                    "--skip-bids-validation",
+                ],
+            )
+
+        assert result.exit_code != 0
+        mock_wrapper.return_value.process_subject.assert_not_called()
 
 
 class TestSessionValidation:

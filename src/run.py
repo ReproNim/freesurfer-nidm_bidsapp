@@ -276,6 +276,7 @@ def process_participant(
     bids_dir,
     output_dir,
     participant_label,
+    session_label,
     freesurfer_license,
     skip_bids_validation,
     skip_freesurfer,
@@ -289,6 +290,7 @@ def process_participant(
         bids_dir (str): Path to BIDS root directory
         output_dir (str): Path to output directory
         participant_label (str): Participant label (with or without "sub-" prefix)
+        session_label (str or None): Optional session label supplied by BABS or the user
         freesurfer_license (str): Path to FreeSurfer license file
         skip_bids_validation (bool): Skip BIDS validation
         skip_freesurfer (bool): Skip FreeSurfer processing, only run NIDM conversion
@@ -310,11 +312,19 @@ def process_participant(
         logger.error(f"Subject sub-{participant_label} not found in dataset")
         sys.exit(1)
 
-    # Auto-detect session if input data has exactly one session
-    # This handles BABS workflows where multi-session data is filtered to single session
     available_sessions = layout.get_sessions(subject=participant_label)
-    detected_session = None
-    if len(available_sessions) == 1:
+    detected_session = session_label
+    if detected_session and detected_session.startswith("ses-"):
+        detected_session = detected_session[4:]
+
+    if detected_session:
+        if detected_session not in available_sessions:
+            logger.error(f"Session ses-{detected_session} not found for subject sub-{participant_label}")
+            sys.exit(1)
+        logger.info(f"Using requested session: ses-{detected_session}")
+    elif len(available_sessions) == 1:
+        # BABS session jobs sparse-check out one session but still invoke the
+        # standard BIDS App positional analysis level, "participant".
         detected_session = available_sessions[0]
         logger.info(f"Auto-detected session: ses-{detected_session}")
 
@@ -325,20 +335,23 @@ def process_participant(
     try:
         if skip_freesurfer:
             # Validate that FreeSurfer outputs exist
-            subject_dir = freesurfer_dir / fs_subject_id
+            fs_output_subject_id = (
+                f"{fs_subject_id}_ses-{detected_session}" if detected_session else fs_subject_id
+            )
+            subject_dir = freesurfer_dir / fs_output_subject_id
             done_marker = subject_dir / "scripts" / "recon-all.done"
 
             if not subject_dir.exists():
                 logger.error(f"Cannot skip FreeSurfer: subject directory not found at {subject_dir}")
-                raise FileNotFoundError(f"FreeSurfer outputs missing for {fs_subject_id}")
+                raise FileNotFoundError(f"FreeSurfer outputs missing for {fs_output_subject_id}")
 
             if not done_marker.exists():
-                logger.error(f"Cannot skip FreeSurfer: recon-all not complete for {fs_subject_id}")
+                logger.error(f"Cannot skip FreeSurfer: recon-all not complete for {fs_output_subject_id}")
                 logger.error(f"Expected completion marker: {done_marker}")
-                raise FileNotFoundError(f"FreeSurfer processing not complete for {fs_subject_id}")
+                raise FileNotFoundError(f"FreeSurfer processing not complete for {fs_output_subject_id}")
 
             logger.info("================================")
-            logger.info(f"Skipping FreeSurfer processing for {fs_subject_id} (--skip-freesurfer)")
+            logger.info(f"Skipping FreeSurfer processing for {fs_output_subject_id} (--skip-freesurfer)")
             logger.info(f"Using existing outputs at {subject_dir}")
             logger.info("================================")
             success = True
@@ -428,22 +441,22 @@ def process_session(
     # Run session-level analysis
     try:
         if skip_freesurfer:
-            # Validate that FreeSurfer outputs exist
-            # Note: For multi-session, the subject ID may be modified to include session
-            subject_dir = freesurfer_dir / fs_subject_id
+            # Validate that session-specific FreeSurfer outputs exist.
+            fs_output_subject_id = f"{fs_subject_id}_ses-{session_label}"
+            subject_dir = freesurfer_dir / fs_output_subject_id
             done_marker = subject_dir / "scripts" / "recon-all.done"
 
             if not subject_dir.exists():
                 logger.error(f"Cannot skip FreeSurfer: subject directory not found at {subject_dir}")
-                raise FileNotFoundError(f"FreeSurfer outputs missing for {fs_subject_id}")
+                raise FileNotFoundError(f"FreeSurfer outputs missing for {fs_output_subject_id}")
 
             if not done_marker.exists():
-                logger.error(f"Cannot skip FreeSurfer: recon-all not complete for {fs_subject_id}")
+                logger.error(f"Cannot skip FreeSurfer: recon-all not complete for {fs_output_subject_id}")
                 logger.error(f"Expected completion marker: {done_marker}")
-                raise FileNotFoundError(f"FreeSurfer processing not complete for {fs_subject_id}")
+                raise FileNotFoundError(f"FreeSurfer processing not complete for {fs_output_subject_id}")
 
             logger.info("================================")
-            logger.info(f"Skipping FreeSurfer processing for {fs_subject_id} (--skip-freesurfer)")
+            logger.info(f"Skipping FreeSurfer processing for {fs_output_subject_id} (--skip-freesurfer)")
             logger.info(f"Using existing outputs at {subject_dir}")
             logger.info("================================")
             success = True
@@ -493,7 +506,10 @@ def process_session(
 @click.option(
     "--session_label",
     "--session-label",
-    help='The label of the session to analyze (with or without "ses-" prefix, e.g., "01" or "ses-01"). Only used with "session" analysis level.',
+    help=(
+        'The session to analyze (with or without "ses-" prefix). '
+        'Accepted with both analysis levels for BABS session-wise jobs.'
+    ),
 )
 @click.option(
     "--freesurfer_license",
@@ -502,7 +518,11 @@ def process_session(
     help="Path to FreeSurfer license file.",
 )
 @click.option("--skip-bids-validation", is_flag=True, help="Skip BIDS validation.")
-@click.option("--skip-freesurfer", is_flag=True, help="Skip FreeSurfer processing, only run NIDM conversion on existing outputs.")
+@click.option(
+    "--skip-freesurfer",
+    is_flag=True,
+    help="Skip FreeSurfer processing and run NIDM conversion on existing outputs.",
+)
 @click.option("--skip_nidm", "--skip-nidm", is_flag=True, help="Skip NIDM output generation.")
 @click.option(
     "--nidm-input-dir",
@@ -548,6 +568,7 @@ def cli(
             bids_dir,
             output_dir,
             participant_label,
+            session_label,
             freesurfer_license,
             skip_bids_validation,
             skip_freesurfer,

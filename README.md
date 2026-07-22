@@ -33,7 +33,7 @@ git clone https://github.com/yourusername/freesurfer-nidm_bidsapp.git
 cd freesurfer-nidm_bidsapp
 ```
 
-# Container Support
+## Container Support
 
 This BIDS App provides support for both Docker and Singularity/Apptainer, allowing you to run the application in various environments including HPC clusters.
 
@@ -45,10 +45,7 @@ You can build the container images using these commands:
 # Build Docker image (for local development)
 python setup.py docker
 
-# Build Singularity/Apptainer image on clusters
-no
-
-# Or build in a custom location
+# Build Singularity/Apptainer image in a custom location
 apptainer build --fakeroot /path/to/output/freesurfer-nidm-bidsapp.sif Singularity
 ```
 
@@ -70,8 +67,9 @@ docker run -v /path/to/license.txt:/license.txt \
   -v /path/to/bids/data:/data \
   -v /path/to/output:/output \
   freesurfer-nidm-bidsapp \
-  --bids_dir /data \
-  --output_dir /output
+  /data /output participant \
+  --participant-label 01 \
+  --fs-license-file /license.txt
 ```
 
 ## Singularity/Apptainer Usage
@@ -81,8 +79,9 @@ docker run -v /path/to/license.txt:/license.txt \
 apptainer run \
   --bind /path/to/license.txt:/license.txt,/path/to/bids/data:/data,/path/to/output:/output \
   /path/to/freesurfer-nidm-bidsapp.sif \
-  --bids_dir /data \
-  --output_dir /output
+  /data /output participant \
+  --participant-label 01 \
+  --fs-license-file /license.txt
 ```
 
 Note: The application files are included in the container image, so there's no need to bind the repository directory. Only the license file, input data, and output directory need to be bound.
@@ -117,9 +116,9 @@ OUTPUT_DIR=/path/to/output
 apptainer run \
   --bind $LICENSE_FILE:/license.txt,$BIDS_DIR:/data,$OUTPUT_DIR:/output \
   $SIF_FILE \
-  --bids_dir /data \
-  --output_dir /output \
-  --participant_label sub-01 sub-02  # Add your subjects here
+  /data /output participant \
+  --participant-label sub-01 \
+  --fs-license-file /license.txt
 ```
 
 Note: We no longer need to bind the repository directory since all required files are now included in the container image.
@@ -129,17 +128,17 @@ Note: We no longer need to bind the repository directory since all required file
 - Positional arguments:
   - `bids_dir`: The directory with the input BIDS dataset
   - `output_dir`: The directory where the output files should be stored
-  - `analysis_level`: Level of the analysis that will be performed. Options are: participant, group
+  - `analysis_level`: Processing level. Choices are `participant` and `session`.
 
 - Optional arguments:
-  - `--participant_label`: The label(s) of the participant(s) to analyze (without "sub-" prefix)
-  - `--session_label`: The label(s) of the session(s) to analyze (without "ses-" prefix)
-  - `--freesurfer_license`: Path to FreeSurfer license file
-  - `--skip_bids_validator`: Skip BIDS validation
-  - `--fs_options`: Additional options to pass to `recon-all` only (e.g., "-parallel -openmp 4")
-  - `--skip_nidm`: Skip NIDM output generation
-
-**Note:** The `--fs_options` parameter only accepts `recon-all` specific options. This app does not expose other FreeSurfer commands or tools.
+  - `--participant-label`: One participant label, with or without the `sub-` prefix.
+  - `--session-label`: One session label, with or without the `ses-` prefix. It is accepted in participant mode for BABS session-wise jobs.
+  - `--fs-license-file`: Path to the FreeSurfer license file.
+  - `--skip-bids-validation`: Skip PyBIDS validation.
+  - `--skip-freesurfer`: Reuse a completed `recon-all` directory and run only the remaining export steps.
+  - `--skip-nidm`: Skip NIDM output generation.
+  - `--nidm-input-dir`: Directory containing an existing NIDM document to augment.
+  - `--verbose`: Enable debug logging.
 
 ### Examples
 
@@ -149,37 +148,46 @@ Process a single subject:
 docker run -v /path/to/bids_dataset:/bids_dataset:ro \
            -v /path/to/output:/output \
            -v /path/to/freesurfer/license.txt:/license.txt \
-           bids/freesurfer:8.0.0 \
-           /bids_dataset /output participant --participant_label 01
+           freesurfer-nidm-bidsapp \
+           /bids_dataset /output participant \
+           --participant-label 01 --fs-license-file /license.txt
 
 # Using Apptainer (for clusters)
 apptainer run \
   --bind /path/to/license.txt:/license.txt,/path/to/bids_dataset:/data,/path/to/output:/output \
   freesurfer.sif \
-  --bids_dir /data \
-  --output_dir /output \
-  --participant_label 01
+  /data /output participant \
+  --participant-label 01 \
+  --fs-license-file /license.txt
 ```
 
-Process multiple subjects in parallel (using FreeSurfer's built-in parallelization):
+Process one session explicitly:
+
 ```bash
-# Using Docker (for local development)
-docker run -v /path/to/bids_dataset:/bids_dataset:ro \
-           -v /path/to/output:/output \
-           -v /path/to/freesurfer/license.txt:/license.txt \
-           bids/freesurfer:8.0.0 \
-           /bids_dataset /output participant --fs_options="-parallel -openmp 4" \
-           --participant_label 01 02 03
-
-# Using Apptainer (for clusters)
 apptainer run \
   --bind /path/to/license.txt:/license.txt,/path/to/bids_dataset:/data,/path/to/output:/output \
   freesurfer.sif \
-  --bids_dir /data \
-  --output_dir /output \
-  --fs_options="-parallel -openmp 4" \
-  --participant_label 01 02 03
+  /data /output session \
+  --participant-label 01 \
+  --session-label baseline \
+  --fs-license-file /license.txt
 ```
+
+The CLI processes one participant or participant/session pair per invocation. Use a scheduler or BABS job array for dataset-level parallelism.
+
+## BABS compatibility
+
+The app supports both the original BABS project layout and the configurable BIDS-study layout introduced by [PennLINC/babs PR #369](https://github.com/PennLINC/babs/pull/369). The new layout places the analysis DataLad dataset at the BABS project root and its RIA stores beneath `.babs/`:
+
+```yaml
+analysis_path: "."
+input_ria_path: ".babs/input_ria"
+output_ria_path: ".babs/output_ria"
+```
+
+See [`examples/babs-freesurfer-nidm-bids-study.yaml`](examples/babs-freesurfer-nidm-bids-study.yaml) for a complete template. It requires a BABS revision containing PR #369. Omit those three path settings to use the legacy `analysis/`, `input_ria/`, and `output_ria/` layout.
+
+BABS invokes the standard positional analysis level `participant` for both subject-wise and session-wise jobs. For a session-wise job, configure `$SESSION_SELECTION_FLAG: "--session-label"`; this app honors that explicit label and only falls back to auto-detection when exactly one session is visible. If an upstream NIDM dataset is used, configure `--nidm-input-dir` explicitly in the BABS YAML.
 
 ## Outputs
 
@@ -189,33 +197,22 @@ apptainer run \
 <output_dir>/
 └── freesurfer-nidm_bidsapp/
     ├── dataset_description.json
+    ├── README
     ├── freesurfer/
-    │   ├── dataset_description.json
-    │   ├── sub-<participant_label>/
-    │   │   ├── ses-<session_label>/  # Optional session directory
-    │   │   │   ├── anat/
-    │   │   │   │   ├── aparc+aseg.mgz
-    │   │   │   │   ├── aseg.mgz
-    │   │   │   │   ├── brainmask.mgz
-    │   │   │   │   └── T1.mgz
-    │   │   │   ├── label/
-    │   │   │   ├── stats/
-    │   │   │   │   ├── aseg.stats
-    │   │   │   │   ├── lh.aparc.stats
-    │   │   │   │   └── rh.aparc.stats
-    │   │   │   ├── surf/
-    │   │   │   │   ├── lh.pial
-    │   │   │   │   ├── lh.white
-    │   │   │   │   ├── rh.pial
-    │   │   │   │   └── rh.white
-    │   │   │   └── provenance.json
-    │   │   └── anat/  # For single-session data
-    │   │       ├── aparc+aseg.mgz
-    │   │       ├── aseg.mgz
-    │   │       ├── brainmask.mgz
-    │   │       └── T1.mgz
+    │   ├── processing_summary.json
+    │   └── sub-<participant>[_ses-<session>]/  # Native SUBJECTS_DIR
+    │       ├── mri/
+    │       ├── label/
+    │       ├── stats/
+    │       ├── surf/
+    │       └── scripts/
+    ├── sub-<participant>/
+    │   ├── anat/                              # Curated derivative copies
+    │   ├── stats/
+    │   └── ses-<session>/                     # Present for session data
+    │       ├── anat/
+    │       └── stats/
     └── nidm/
-        ├── dataset_description.json
         ├── sub-<participant_label>.ttl
         └── sub-<participant_label>_ses-<session_label>.ttl
 ```
