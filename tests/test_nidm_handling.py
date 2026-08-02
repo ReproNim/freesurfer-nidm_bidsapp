@@ -250,6 +250,118 @@ class TestNIDMSkipFlag:
             assert len(nidm_calls) == 0
 
 
+class TestNIDMAppendCommand:
+    """Regression tests for the fs_to_nidm append (-n) command construction."""
+
+    def _nidm_cmd(self, mock_subprocess):
+        """Return the argv list of the fs_to_nidm invocation, or None."""
+        for c in mock_subprocess.call_args_list:
+            argv = c.args[0] if c.args else c.kwargs.get("args")
+            if isinstance(argv, list) and any("fs_to_nidm" in str(a) for a in argv):
+                return argv
+        return None
+
+    def test_append_command_does_not_pass_jsonld(self, tmp_path, bids_single_session):
+        """-j must NOT be passed alongside -n.
+
+        fs_to_nidm's append branch accumulates across stats files by re-reading the
+        -n file each loop iteration and writing back to it. With -j the output goes
+        to '<nidm_file>.json' instead, so every stats file except the last-globbed
+        one is silently discarded. See src/run.py for the full explanation.
+        """
+        nidm_dir = bids_single_session.parent / "NIDM"
+        nidm_dir.mkdir()
+        (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .")
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        runner = CliRunner()
+        with patch('src.run.FreeSurferWrapper') as mock_wrapper, \
+             patch('src.run.subprocess.run') as mock_subprocess:
+            mock_wrapper.return_value.process_subject.return_value = True
+            mock_subprocess.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            runner.invoke(cli, [
+                str(bids_single_session),
+                str(output_dir),
+                'participant',
+                '--participant-label', '001',
+                '--skip-bids-validation'
+            ])
+
+            cmd = self._nidm_cmd(mock_subprocess)
+            assert cmd is not None, "fs_to_nidm was never invoked"
+            assert "-n" in cmd, f"expected append mode (-n) in: {cmd}"
+            assert "-j" not in cmd, (
+                "-j must not be combined with -n; it breaks multi-stats-file "
+                f"accumulation. Got: {cmd}"
+            )
+            assert "--forcenidm" in cmd, f"expected --forcenidm in: {cmd}"
+
+    def test_shared_cde_not_merged_into_per_subject_ttl(self, tmp_path, bids_single_session):
+        """fs_cde.ttl must ship alongside, not be folded into each subject TTL.
+
+        The CDE vocabulary is a static lookup table, byte-identical for every
+        subject, and is already written to the same nidm/ directory. Embedding it
+        makes every per-subject TTL unique and ~2 MB larger for no information gain.
+        """
+        nidm_in = bids_single_session.parent / "NIDM"
+        nidm_in.mkdir()
+        (nidm_in / "nidm.ttl").write_text(
+            '@prefix ex: <http://example.org/> .\nex:subject a ex:Person .\n'
+        )
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Match on the local name, not the full URI: rdflib re-serializes
+        # <http://example.org/CDE_ONLY_TERM> in prefixed form (ex:CDE_ONLY_TERM),
+        # so asserting on the full URI would pass even when the CDE was merged.
+        cde_marker = "CDE_ONLY_TERM"
+
+        def fake_convert(cmd, *args, **kwargs):
+            """Emulate fs_to_nidm: append to the -n file and drop a fs_cde.ttl."""
+            nidm_file = Path(cmd[cmd.index("-n") + 1])
+            nidm_file.write_text(
+                '@prefix ex: <http://example.org/> .\n'
+                'ex:subject a ex:Person .\n'
+                'ex:collection ex:measure "42" .\n'
+            )
+            (nidm_file.parent / "fs_cde.ttl").write_text(
+                '@prefix ex: <http://example.org/> .\n'
+                f'ex:{cde_marker} a ex:DataElement .\n'
+            )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        runner = CliRunner()
+        with patch('src.run.FreeSurferWrapper') as mock_wrapper, \
+             patch('src.run.subprocess.run', side_effect=fake_convert):
+            mock_wrapper.return_value.process_subject.return_value = True
+
+            runner.invoke(cli, [
+                str(bids_single_session),
+                str(output_dir),
+                'participant',
+                '--participant-label', '001',
+                '--skip-bids-validation'
+            ])
+
+        nidm_out = output_dir / "freesurfer-nidm_bidsapp" / "nidm"
+        aggregated = nidm_out / "sub-001.ttl"
+        assert aggregated.exists(), f"aggregated TTL missing; have: {list(nidm_out.glob('*'))}"
+
+        # The shared vocabulary must still be shipped...
+        assert (nidm_out / "fs_cde.ttl").exists(), "fs_cde.ttl must ship alongside"
+        # ...but must NOT have been merged into the per-subject TTL.
+        assert cde_marker not in aggregated.read_text(), (
+            "fs_cde.ttl content was merged into the per-subject TTL; it should be "
+            "shipped alongside instead"
+        )
+        # Subject-specific content must still be there.
+        assert "collection" in aggregated.read_text()
+
+
 class TestNIDMDatasetDescription:
     """Test NIDM dataset_description.json creation."""
 
