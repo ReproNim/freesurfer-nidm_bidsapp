@@ -146,11 +146,20 @@ def nidm_conversion(
 
     existing_nidm_file = None
     if nidm_input_dir and nidm_input_dir.exists():
-        # Prefer top-level nidm.ttl then fall back to any .ttl/.jsonld file present
-        primary_candidate = nidm_input_dir / "nidm.ttl"
-        if primary_candidate.exists():
-            existing_nidm_file = primary_candidate
-        else:
+        # Look for an existing NIDM file to append to, most specific first.
+        # Supports both the legacy single-file layout (top-level nidm.ttl) and
+        # the per-subject layout used by newer NIDM datasets (e.g. nidm_4.5.0:
+        # sub-<id>/nidm.ttl, optionally nested under a ses-<id> subdir).
+        subject_dirname = f"sub-{participant_label}"
+        candidates = []
+        if bids_session:
+            candidates.append(nidm_input_dir / subject_dirname / f"ses-{bids_session}" / "nidm.ttl")
+            candidates.append(nidm_input_dir / f"{subject_dirname}_ses-{bids_session}" / "nidm.ttl")
+        candidates.append(nidm_input_dir / subject_dirname / "nidm.ttl")
+        candidates.append(nidm_input_dir / "nidm.ttl")
+        existing_nidm_file = next((c for c in candidates if c.exists()), None)
+        if existing_nidm_file is None:
+            # Legacy fallback: any top-level serialized NIDM file.
             for pattern in ("*.ttl", "*.jsonld", "*.json-ld"):
                 try:
                     existing_nidm_file = next(nidm_input_dir.glob(pattern))
