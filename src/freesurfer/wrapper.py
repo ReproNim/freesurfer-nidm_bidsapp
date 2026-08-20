@@ -43,13 +43,20 @@ class FreeSurferWrapper:
         """
         self.bids_dir = Path(bids_dir)
         self.output_dir = Path(output_dir)
-        self.freesurfer_dir = self.output_dir / "freesurfer"
-        self.freesurfer_license = freesurfer_license    
+        # recon-all writes to $SUBJECTS_DIR/<subjid>, so it cannot write straight to
+        # the final location (<output_dir>/sub-<id>/freesurfer). Stage it here, then
+        # relocate with a rename once recon-all succeeds -- same filesystem, so O(1).
+        # Dot-prefixed and outside sub-<id>/, so BABS never zips it.
+        self.freesurfer_dir = self.output_dir / ".fs_staging"
+        self.freesurfer_license = freesurfer_license
 
         # Track processing results and image information
         self.results = {"success": [], "failure": [], "skipped": []}
         self.subject_t1_mapping = {}  # Store subject->T1 mapping
         self.temp_files = []
+        # Set once a subject is handled, so the processing summary can be written
+        # inside that subject's directory (BABS zips only sub-<id>/).
+        self.last_subject_dir = None
 
         # Ensure output directories exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -191,9 +198,25 @@ class FreeSurferWrapper:
                            (f" session {session_label}" if session_label else ""))
                 self.subject_t1_mapping[fs_subject_id]['T2w_images'] = [str(img) for img in t2w_images]
 
-            # Check if subject already processed
-            if (self.freesurfer_dir / fs_subject_id / "scripts" / "recon-all.done").exists():
+            # Check if subject already processed. A completed run has already been
+            # relocated out of staging, so check the final location; fall back to
+            # staging to also catch a run interrupted between recon-all and the move.
+            session_for_output = bids_session if session_label else None
+            final_fs_dir = self.subject_output_dir(subject_id, session_for_output) / "freesurfer"
+            staged_fs_dir = self.freesurfer_dir / fs_subject_id
+            if (final_fs_dir / "scripts" / "recon-all.done").exists():
                 logger.info(f"{fs_subject_id} already processed. Skipping...")
+                self.results["skipped"].append(fs_subject_id)
+                self.last_subject_dir = self.subject_output_dir(subject_id, session_for_output)
+                return True
+            if (staged_fs_dir / "scripts" / "recon-all.done").exists():
+                logger.info(
+                    f"{fs_subject_id} recon-all already complete in staging; "
+                    "relocating without rerunning."
+                )
+                self._relocate_freesurfer_output(subject_id, session_for_output)
+                self.last_subject_dir = self.subject_output_dir(subject_id, session_for_output)
+                self._organize_bids_output(subject_id, session_for_output)
                 self.results["skipped"].append(fs_subject_id)
                 return True
 
@@ -204,8 +227,13 @@ class FreeSurferWrapper:
             
             subprocess.run(cmd, check=True, capture_output=True, text=True)
 
-            # Organize outputs
-            self._organize_bids_output(subject_id, bids_session if session_label else None)
+            # Move the staged recon-all tree into <output_dir>/sub-<id>/freesurfer,
+            # then write the BIDS-ified copies alongside it.
+            session_for_output = bids_session if session_label else None
+            if self._relocate_freesurfer_output(subject_id, session_for_output) is None:
+                raise RuntimeError(f"recon-all produced no output for {fs_subject_id}")
+            self.last_subject_dir = self.subject_output_dir(subject_id, session_for_output)
+            self._organize_bids_output(subject_id, session_for_output)
 
             self.results["success"].append(fs_subject_id)
             logger.info(f"Successfully processed {fs_subject_id}")
@@ -259,6 +287,63 @@ class FreeSurferWrapper:
             return True
         return False
 
+    def subject_output_dir(self, subject_id, session_label=None):
+        """
+        Per-subject output directory -- the unit BABS zips.
+
+        Returns <output_dir>/sub-<id>[/ses-<session>]. Everything produced for a
+        subject (recon-all tree, BIDS-ified copies, nidm.ttl, fs_cde.ttl) lives here,
+        so the zip's top-level folder is the subject directory.
+
+        Parameters
+        ----------
+        subject_id : str
+            Subject ID (including 'sub-' prefix)
+        session_label : str, optional
+            Session label (without 'ses-' prefix)
+        """
+        subject_dir = self.output_dir / subject_id
+        if session_label:
+            subject_dir = subject_dir / f"ses-{session_label}"
+        return subject_dir
+
+    def _relocate_freesurfer_output(self, subject_id, session_label=None):
+        """
+        Move the staged recon-all tree into the per-subject output directory.
+
+        Staging exists only because recon-all insists on $SUBJECTS_DIR/<subjid>.
+        Returns the final freesurfer directory, or None if staging is missing.
+        """
+        fs_subject_id = f"{subject_id}_ses-{session_label}" if session_label else subject_id
+        staged = self.freesurfer_dir / fs_subject_id
+        if not staged.exists():
+            logger.error(f"Staged FreeSurfer output not found: {staged}")
+            return None
+
+        dest = self.subject_output_dir(subject_id, session_label) / "freesurfer"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            # Idempotency: a rerun into an existing output. Keep the newer tree.
+            logger.warning(f"Replacing existing FreeSurfer output at {dest}")
+            shutil.rmtree(dest)
+
+        try:
+            staged.rename(dest)
+        except OSError:
+            # Different filesystem (or other rename failure) -- fall back to a copy.
+            logger.info(f"rename failed; copying {staged} -> {dest}")
+            shutil.copytree(staged, dest)
+            shutil.rmtree(staged, ignore_errors=True)
+
+        # Leave no empty staging directory behind in the output tree.
+        try:
+            self.freesurfer_dir.rmdir()
+        except OSError:
+            pass  # not empty (other subjects mid-flight) or already gone
+
+        logger.info(f"FreeSurfer output placed at {dest}")
+        return dest
+
     def _organize_bids_output(self, subject_id, session_label=None):
         """
         Organize FreeSurfer outputs in BIDS-compliant format.
@@ -272,22 +357,17 @@ class FreeSurferWrapper:
         """
         # Set up directories
         session_part = f"_ses-{session_label}" if session_label else ""
-        bids_subject_dir = self.output_dir / subject_id
-        if session_label:
-            bids_subject_dir = bids_subject_dir / f"ses-{session_label}"
+        bids_subject_dir = self.subject_output_dir(subject_id, session_label)
 
         anat_dir = bids_subject_dir / "anat"
         stats_dir = bids_subject_dir / "stats"
         anat_dir.mkdir(parents=True, exist_ok=True)
         stats_dir.mkdir(parents=True, exist_ok=True)
 
-        # Determine FreeSurfer subject directory name
-        fs_subject_id = subject_id
-        if session_label:
-            fs_subject_id = f"{subject_id}_ses-{session_label}"
-
-        # Check FreeSurfer subject directory
-        fs_subject_dir = self.freesurfer_dir / fs_subject_id
+        # The recon-all tree now lives beside these, under the same subject dir.
+        # Keeping it namespaced under freesurfer/ is what stops recon-all's own
+        # stats/ from colliding with the BIDS-named copies written below.
+        fs_subject_dir = bids_subject_dir / "freesurfer"
         if not fs_subject_dir.exists():
             logger.error(f"FreeSurfer subject directory not found: {fs_subject_dir}")
             return
@@ -380,7 +460,11 @@ For more information about FreeSurfer, visit: http://surfer.nmr.mgh.harvard.edu/
         """Save processing summary to JSON file."""
         if summary is None:
             summary = self.get_processing_summary()
-        output_path = self.freesurfer_dir / "processing_summary.json"
+        # Write inside the subject directory when we know it -- BABS zips only
+        # sub-<id>/, so anything outside it is dropped from the results.
+        target_dir = self.last_subject_dir or self.output_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        output_path = target_dir / "processing_summary.json"
         with open(output_path, "w") as f:
             json.dump(summary, f, indent=2)
         logger.info(f"Processing summary saved to {output_path}")
@@ -425,6 +509,9 @@ For more information about FreeSurfer, visit: http://surfer.nmr.mgh.harvard.edu/
             info["T2w_images"] = [str(img) for img in t2w_images]
 
         self.subject_t1_mapping[fs_subject_id] = info
+        # --skip-freesurfer reuses an existing reconstruction, so the subject
+        # directory is still where per-subject artefacts belong.
+        self.last_subject_dir = self.subject_output_dir(subject_id, bids_session)
         return info
 
     def get_subject_t1_info(self, subject_id, session_label=None):

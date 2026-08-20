@@ -91,8 +91,12 @@ class TestNIDMInputDiscovery:
 class TestNIDMCopyBehavior:
     """Test NIDM file copy logic."""
 
-    def test_nidm_directory_created(self, tmp_path, bids_single_session):
-        """Verify NIDM output directory is created."""
+    def test_nidm_written_into_subject_directory(self, tmp_path, bids_single_session):
+        """NIDM output goes in the subject dir, not a shared nidm/ directory.
+
+        A shared nidm/ made every subject's nidm.ttl collide on the same path, so
+        only the first subject unzipped survived.
+        """
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
@@ -109,8 +113,15 @@ class TestNIDMCopyBehavior:
                 '--skip-bids-validation'
             ])
 
-            nidm_dir = output_dir / "freesurfer-nidm_bidsapp" / "nidm"
-            assert nidm_dir.exists()
+            assert (output_dir / "sub-001").is_dir(), (
+                f"expected per-subject dir; have: {list(output_dir.iterdir())}"
+            )
+            assert not (output_dir / "freesurfer-nidm_bidsapp").exists(), (
+                "app-name wrapper directory should no longer be created"
+            )
+            assert not (output_dir / "nidm").exists(), (
+                "shared nidm/ directory should no longer be created"
+            )
 
 
 class TestNIDMAggregation:
@@ -347,9 +358,9 @@ class TestNIDMAppendCommand:
                 '--skip-bids-validation'
             ])
 
-        nidm_out = output_dir / "freesurfer-nidm_bidsapp" / "nidm"
-        aggregated = nidm_out / "sub-001.ttl"
-        assert aggregated.exists(), f"aggregated TTL missing; have: {list(nidm_out.glob('*'))}"
+        nidm_out = output_dir / "sub-001"
+        aggregated = nidm_out / "nidm.ttl"
+        assert aggregated.exists(), f"nidm.ttl missing; have: {list(nidm_out.glob('*'))}"
 
         # The shared vocabulary must still be shipped...
         assert (nidm_out / "fs_cde.ttl").exists(), "fs_cde.ttl must ship alongside"

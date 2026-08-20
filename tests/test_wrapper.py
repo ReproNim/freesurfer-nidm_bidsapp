@@ -90,7 +90,14 @@ def test_wrapper_initialization(bids_dataset, output_dir, freesurfer_license):
 
         assert wrapper.bids_dir == Path(bids_dataset)
         assert wrapper.output_dir == Path(output_dir)
-        assert wrapper.freesurfer_dir == Path(output_dir) / "freesurfer"
+        # recon-all stages here; the finished tree is relocated to
+        # <output_dir>/sub-<id>/freesurfer so the subject dir is the zip top-level.
+        assert wrapper.freesurfer_dir == Path(output_dir) / ".fs_staging"
+        assert wrapper.subject_output_dir("sub-001") == Path(output_dir) / "sub-001"
+        assert (
+            wrapper.subject_output_dir("sub-001", "baseline")
+            == Path(output_dir) / "sub-001" / "ses-baseline"
+        )
         assert wrapper.freesurfer_license == str(freesurfer_license)
 
 
@@ -140,8 +147,16 @@ def test_process_subject(bids_dataset, output_dir, freesurfer_license, mock_bids
             freesurfer_license=str(freesurfer_license)
         )
 
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value.returncode = 0
+        def fake_recon_all(cmd, *args, **kwargs):
+            """recon-all is mocked, so fabricate the tree it would have staged."""
+            staged = wrapper.freesurfer_dir / "sub-001"
+            (staged / "scripts").mkdir(parents=True, exist_ok=True)
+            (staged / "mri").mkdir(exist_ok=True)
+            (staged / "stats").mkdir(exist_ok=True)
+            (staged / "scripts" / "recon-all.done").write_text("")
+            return MagicMock(returncode=0)
+
+        with patch('subprocess.run', side_effect=fake_recon_all) as mock_run:
             success = wrapper.process_subject("sub-001", mock_bids_layout)
             assert success
             mock_run.assert_called_once()
@@ -150,6 +165,30 @@ def test_process_subject(bids_dataset, output_dir, freesurfer_license, mock_bids
             assert "-subjid" in cmd
             assert "sub-001" in cmd
             assert "-all" in cmd[-1]  # Check -all is at the end
+
+            # The staged tree must have been relocated under the subject dir.
+            final_fs = Path(output_dir) / "sub-001" / "freesurfer"
+            assert final_fs.is_dir(), f"expected relocated tree at {final_fs}"
+            assert (final_fs / "scripts" / "recon-all.done").exists()
+            assert not (wrapper.freesurfer_dir / "sub-001").exists(), "staging not cleaned up"
+
+
+def test_process_subject_fails_when_recon_all_produces_nothing(
+    bids_dataset, output_dir, freesurfer_license, mock_bids_layout
+):
+    """A recon-all that exits 0 but writes nothing must not be reported as success."""
+    with patch.dict(os.environ, {"FREESURFER_HOME": "/opt/freesurfer"}):
+        wrapper = FreeSurferWrapper(
+            str(bids_dataset),
+            str(output_dir),
+            freesurfer_license=str(freesurfer_license)
+        )
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value.returncode = 0  # exits clean, produces no tree
+            success = wrapper.process_subject("sub-001", mock_bids_layout)
+            assert success is False
+            assert "sub-001" in wrapper.results["failure"]
 
 
 def test_processing_summary(bids_dataset, output_dir, freesurfer_license):

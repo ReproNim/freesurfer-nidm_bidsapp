@@ -12,11 +12,15 @@ from src.freesurfer.wrapper import FreeSurferWrapper
 class TestOutputDirectoryCreation:
     """Test cases for output directory creation."""
 
-    def test_freesurfer_output_directory_created(self, tmp_path, bids_single_session):
-        """Verify freesurfer-nidm/freesurfer/ directory is created."""
+    def test_freesurfer_staging_directory_created(self, tmp_path, bids_single_session):
+        """Verify the recon-all staging directory is created.
+
+        recon-all writes $SUBJECTS_DIR/<subjid>, so it stages here and the finished
+        tree is relocated to <output_dir>/sub-<id>/freesurfer.
+        """
         output_dir = tmp_path / "output"
-        app_output_dir = output_dir / "freesurfer-nidm_bidsapp"
-        freesurfer_dir = app_output_dir / "freesurfer"
+        app_output_dir = output_dir
+        freesurfer_dir = app_output_dir / ".fs_staging"
 
         # Mock FreeSurfer environment
         import os
@@ -51,7 +55,7 @@ class TestOutputDirectoryCreation:
     def test_output_directory_structure(self, tmp_path, bids_single_session):
         """Verify output directory structure follows BIDS derivatives."""
         output_dir = tmp_path / "output"
-        app_output_dir = output_dir / "freesurfer-nidm_bidsapp"
+        app_output_dir = output_dir
 
         # Mock FreeSurfer environment
         import os
@@ -67,9 +71,11 @@ class TestOutputDirectoryCreation:
             freesurfer_license=license_file
         )
 
-        # Verify main directories exist
+        # Per-subject layout: no app-name wrapper and no shared nidm/ directory.
+        # Everything for a subject goes under <output_dir>/sub-<id>/.
         assert app_output_dir.exists()
-        assert (app_output_dir / "freesurfer").exists()
+        assert (app_output_dir / ".fs_staging").exists()
+        assert wrapper.subject_output_dir("sub-01") == app_output_dir / "sub-01"
 
 
 class TestDatasetDescription:
