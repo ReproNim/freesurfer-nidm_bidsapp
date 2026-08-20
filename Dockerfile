@@ -32,7 +32,7 @@ RUN python3 -m pip install --upgrade pip setuptools wheel && \
     python3 -m pip install -e . && \
     cd /opt && \
     python3 -m pip install -r requirements.txt && \
-    python3 -m pip install --no-cache-dir --upgrade 'rdflib>=7.0.0' && \
+    python3 -m pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8' && \
     python3 -m pip install -e .
 
 # =======================================

@@ -32,7 +32,7 @@ From: vnmd/freesurfer_8.0.0
     
     cd /opt
     python3 -m pip install -r requirements.txt
-    python3 -m pip install --no-cache-dir --upgrade 'rdflib>=7.0.0'
+    python3 -m pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8'
     python3 -m pip install -e .
 
 %environment

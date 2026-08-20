@@ -146,11 +146,20 @@ def nidm_conversion(
 
     existing_nidm_file = None
     if nidm_input_dir and nidm_input_dir.exists():
-        # Prefer top-level nidm.ttl then fall back to any .ttl/.jsonld file present
-        primary_candidate = nidm_input_dir / "nidm.ttl"
-        if primary_candidate.exists():
-            existing_nidm_file = primary_candidate
-        else:
+        # Look for an existing NIDM file to append to, most specific first.
+        # Supports both the legacy single-file layout (top-level nidm.ttl) and
+        # the per-subject layout used by newer NIDM datasets (e.g. nidm_4.5.0:
+        # sub-<id>/nidm.ttl, optionally nested under a ses-<id> subdir).
+        subject_dirname = f"sub-{participant_label}"
+        candidates = []
+        if bids_session:
+            candidates.append(nidm_input_dir / subject_dirname / f"ses-{bids_session}" / "nidm.ttl")
+            candidates.append(nidm_input_dir / f"{subject_dirname}_ses-{bids_session}" / "nidm.ttl")
+        candidates.append(nidm_input_dir / subject_dirname / "nidm.ttl")
+        candidates.append(nidm_input_dir / "nidm.ttl")
+        existing_nidm_file = next((c for c in candidates if c.exists()), None)
+        if existing_nidm_file is None:
+            # Legacy fallback: any top-level serialized NIDM file.
             for pattern in ("*.ttl", "*.jsonld", "*.json-ld"):
                 try:
                     existing_nidm_file = next(nidm_input_dir.glob(pattern))
@@ -182,7 +191,13 @@ def nidm_conversion(
     # Build command: use -n for existing NIDM file, -o for new output
     # Note: fs_to_nidm does not allow both -n and -o at the same time
     if copied_nidm:
-        cmd = [sys.executable, "-m", module_name, "-s", subject_dir, "-n", str(copied_nidm), "-j", "--forcenidm"]
+        # NOTE: do NOT pass -j here. In fs_to_nidm's append branch the per-stats-file
+        # loop accumulates by re-reading the -n file each iteration and writing back to
+        # it. With -j the result is written to "<nidm_file>.json" instead, so the next
+        # iteration re-reads the *unmodified* -n file and every stats file except the
+        # last-globbed one is silently discarded (135 vs 5188 measurements on ABIDE
+        # sub-0051456, and nondeterministic because glob order is filesystem-dependent).
+        cmd = [sys.executable, "-m", module_name, "-s", subject_dir, "-n", str(copied_nidm), "--forcenidm"]
         if verbose:
             logger.info(f"Found existing NIDM file: {existing_nidm_file}")
             logger.info(f"Adding data to existing NIDM file: {copied_nidm}")
@@ -216,8 +231,10 @@ def nidm_conversion(
             logger.error(f"Command output: {result.stdout}")
         sys.exit(1)
     
-    # Log what files exist in output directory after conversion
-    logger.info(f"Files in NIDM output directory after conversion:")
+    # Log what files exist in output directory after conversion. These are the
+    # intermediate converter outputs; the aggregated per-subject TTL is written
+    # further below and logged separately.
+    logger.info(f"Intermediate NIDM converter outputs:")
     for file in Path(nidm_dir).glob("*"):
         logger.info(f"  - {file.name} ({file.stat().st_size} bytes)")
 
@@ -233,7 +250,23 @@ def nidm_conversion(
     elif existing_nidm_file and existing_nidm_file.exists():
         aggregation_sources.append(existing_nidm_file)
 
+    # The FreeSurfer CDE vocabulary (fs_cde.ttl) is a static, deterministic lookup
+    # table -- byte-identical for every subject and every run. It is required to
+    # interpret the fs_* measurement predicates, but it is already written to this
+    # same nidm/ directory as its own file, so folding it into each per-subject TTL
+    # is pure duplication (~2.0 MB of a 2.3 MB output, per subject). Excluding it
+    # keeps the per-subject TTL at ~250 KB of genuinely subject-specific triples and
+    # lets git-annex store the shared vocabulary once. This matches the sibling
+    # fsl-nidm BIDSapp, which likewise ships fsl_cde.ttl alongside rather than inside
+    # its merged nidm.ttl. Consumers must load nidm/fs_cde.ttl to resolve fs_* terms.
+    CDE_FILENAMES = {"fs_cde.ttl"}
     for candidate in new_outputs:
+        if candidate.name in CDE_FILENAMES:
+            logger.info(
+                f"Not merging shared CDE vocabulary into per-subject TTL: {candidate.name} "
+                f"(shipped alongside in {Path(nidm_dir).name}/)"
+            )
+            continue
         if candidate.suffix.lower() in {".ttl", ".json", ".jsonld", ".json-ld"}:
             aggregation_sources.append(candidate)
 
@@ -265,6 +298,11 @@ def nidm_conversion(
 
     try:
         aggregated_graph.serialize(destination=str(target_ttl), format="turtle")
+        logger.info(
+            f"Wrote aggregated NIDM output: {target_ttl.name} "
+            f"({target_ttl.stat().st_size} bytes, {len(aggregated_graph)} triples) "
+            f"from {len(aggregation_sources)} source(s)"
+        )
     except Exception as serialize_error:  # pragma: no cover
         logger.warning(f"Failed to write aggregated TTL output {target_ttl}: {serialize_error}")
 
