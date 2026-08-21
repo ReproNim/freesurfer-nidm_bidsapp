@@ -65,10 +65,14 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
     if not nidm_input_dir.exists():
         nidm_input_dir = None
 
-    # First create the main output directory
-    app_output_dir = Path(output_dir) / "freesurfer-nidm_bidsapp"
-    freesurfer_dir = app_output_dir / "freesurfer"
-    nidm_dir = app_output_dir / "nidm"
+    # Per-subject output layout (study-wide standard): everything an app produces
+    # for a subject lives under <output_dir>/sub-<id>/, so the BABS zip's top-level
+    # folder is the subject directory and results land as
+    # <derivative_name>/sub-<id>/... when unzipped. There is no app-name wrapper
+    # directory and no shared nidm/ directory -- a shared nidm/ made every subject's
+    # nidm.ttl collide on the same path, so only the first subject's survived.
+    app_output_dir = Path(output_dir)
+    freesurfer_dir = app_output_dir / ".fs_staging"
 
     # Set logging level and print version info
     setup_logging(logging.DEBUG if verbose else logging.INFO)
@@ -105,12 +109,25 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
         logger.error(f"Error initializing FreeSurfer wrapper: {str(e)}")
         sys.exit(1)
 
-    return layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, nidm_input_dir, version_info
+    return layout, freesurfer_wrapper, freesurfer_dir, nidm_input_dir, version_info
+
+
+def subject_output_dir(output_dir, participant_label, session=None):
+    """Per-subject output directory -- the unit BABS zips.
+
+    <output_dir>/sub-<label>[/ses-<session>]. This is the single source of truth
+    for the output layout at the run level; FreeSurferWrapper mirrors it for its
+    own bookkeeping. Deliberately independent of the wrapper so the layout does
+    not depend on FreeSurfer-specific state.
+    """
+    subject_dir = Path(output_dir) / f"sub-{participant_label}"
+    if session:
+        subject_dir = subject_dir / f"ses-{session}"
+    return subject_dir
 
 
 def nidm_conversion(
-    nidm_dir,
-    freesurfer_dir,
+    output_dir,
     participant_label,
     freesurfer_wrapper,
     bids_session=None,
@@ -118,21 +135,30 @@ def nidm_conversion(
     nidm_input_dir=None,
 ):
     """Convert FreeSurfer outputs to NIDM format.
+
+    Writes nidm.ttl (and the shared fs_cde.ttl vocabulary) into the subject's own
+    output directory, <output_dir>/sub-<id>[/ses-<session>]/, alongside the analysis
+    results. Output is always named nidm.ttl -- the subject identity is carried by
+    the directory, which is also what keeps concurrent subjects from colliding.
+
     Args:
-        nidm_dir (str): Path to NIDM output directory
-        freesurfer_dir (str): Path to FreeSurfer output directory
+        output_dir (str or Path): Base output directory (the derivative root)
         participant_label (str): Participant label (without "sub-" prefix)
         freesurfer_wrapper (FreeSurferWrapper): Instance of FreeSurferWrapper containing T1 info
         bids_session (str): Session label (without "ses-" prefix)
         verbose (bool): Enable verbose output
         nidm_input_dir (Path or None): Optional path to existing NIDM resources
     """
-    # Determine subject directory with session info (add sub- prefix for FreeSurfer directory)
+    # fs_subject_id is the *provenance* identifier (used for logging and for the
+    # T1 mapping key); the on-disk location is the subject directory.
     if bids_session is None:
         fs_subject_id = f"sub-{participant_label}"
     else:
         fs_subject_id = f"sub-{participant_label}_ses-{bids_session}"
-    subject_dir = os.path.join(freesurfer_dir, fs_subject_id)
+
+    # NIDM output goes in the subject dir; recon-all's tree is namespaced under it.
+    nidm_dir = subject_output_dir(output_dir, participant_label, bids_session)
+    subject_dir = str(nidm_dir / "freesurfer")
 
     # Get T1 and T2 image information. The mapping is keyed by the base subject
     # ID plus session, so pass those separately rather than the combined ID.
@@ -172,7 +198,10 @@ def nidm_conversion(
     
     copied_nidm = None
     if existing_nidm_file:
-        copied_nidm = Path(nidm_dir) / existing_nidm_file.name
+        # Always copy to nidm.ttl regardless of the input's filename, so the
+        # append lands directly on the final product and legacy input names
+        # (e.g. sub-<id>.ttl) don't leak into the output.
+        copied_nidm = Path(nidm_dir) / "nidm.ttl"
         try:
             if existing_nidm_file.resolve() != copied_nidm.resolve():
                 shutil.copy2(existing_nidm_file, copied_nidm)
@@ -244,6 +273,9 @@ def nidm_conversion(
         logger.warning("No new NIDM outputs were generated; skipping aggregation step")
         return
 
+    # The product is always <subject_dir>/nidm.ttl.
+    target_ttl = Path(nidm_dir) / "nidm.ttl"
+
     aggregation_sources = []
     if copied_nidm and Path(copied_nidm).exists():
         aggregation_sources.append(Path(copied_nidm))
@@ -252,26 +284,40 @@ def nidm_conversion(
 
     # The FreeSurfer CDE vocabulary (fs_cde.ttl) is a static, deterministic lookup
     # table -- byte-identical for every subject and every run. It is required to
-    # interpret the fs_* measurement predicates, but it is already written to this
-    # same nidm/ directory as its own file, so folding it into each per-subject TTL
-    # is pure duplication (~2.0 MB of a 2.3 MB output, per subject). Excluding it
-    # keeps the per-subject TTL at ~250 KB of genuinely subject-specific triples and
-    # lets git-annex store the shared vocabulary once. This matches the sibling
-    # fsl-nidm BIDSapp, which likewise ships fsl_cde.ttl alongside rather than inside
-    # its merged nidm.ttl. Consumers must load nidm/fs_cde.ttl to resolve fs_* terms.
+    # interpret the fs_* measurement predicates, but it is written to this same
+    # subject directory as its own file, so folding it into nidm.ttl is pure
+    # duplication (~2.0 MB of a 2.3 MB output, per subject). Excluding it keeps
+    # nidm.ttl at ~250 KB of genuinely subject-specific triples and lets git-annex
+    # store the shared vocabulary once. This matches the sibling fsl-nidm BIDSapp,
+    # which likewise ships fsl_cde.ttl alongside rather than inside its nidm.ttl.
+    # Consumers must load fs_cde.ttl to resolve fs_* terms.
     CDE_FILENAMES = {"fs_cde.ttl"}
     for candidate in new_outputs:
         if candidate.name in CDE_FILENAMES:
             logger.info(
-                f"Not merging shared CDE vocabulary into per-subject TTL: {candidate.name} "
-                f"(shipped alongside in {Path(nidm_dir).name}/)"
+                f"Not merging shared CDE vocabulary into nidm.ttl: {candidate.name} "
+                "(shipped alongside it)"
             )
+            continue
+        if candidate == target_ttl:
             continue
         if candidate.suffix.lower() in {".ttl", ".json", ".jsonld", ".json-ld"}:
             aggregation_sources.append(candidate)
 
     if not aggregation_sources:
         logger.warning("No NIDM sources found to aggregate after conversion")
+        return
+
+    # Append path: fs_to_nidm has already accumulated everything into the copied
+    # file, which *is* the target. Re-serializing it would be a no-op round-trip.
+    if aggregation_sources == [target_ttl]:
+        logger.info(
+            f"NIDM output already in place: {target_ttl.name} "
+            f"({target_ttl.stat().st_size} bytes)"
+        )
+        logger.info("================================")
+        logger.info(f"NIDM conversion complete for {fs_subject_id}")
+        logger.info("================================")
         return
 
     def _guess_rdf_format(path: Path) -> str:
@@ -292,9 +338,6 @@ def nidm_conversion(
     if len(aggregated_graph) == 0:
         logger.warning("Aggregated NIDM graph is empty; skipping serialization")
         return
-
-    target_base = Path(nidm_dir) / fs_subject_id
-    target_ttl = target_base.with_suffix(".ttl")
 
     try:
         aggregated_graph.serialize(destination=str(target_ttl), format="turtle")
@@ -337,7 +380,7 @@ def process_participant(
         nidm_input_dir (str or None): Path to existing NIDM directory
         verbose (bool): Enable verbose output
     """
-    layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, nidm_input_dir, version_info = initialize(
+    layout, freesurfer_wrapper, freesurfer_dir, nidm_input_dir, version_info = initialize(
         bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir
     )
 
@@ -386,7 +429,13 @@ def process_participant(
             fs_output_subject_id = (
                 f"{fs_subject_id}_ses-{detected_session}" if detected_session else fs_subject_id
             )
-            subject_dir = freesurfer_dir / fs_output_subject_id
+            _session_for_output = detected_session
+            # Existing outputs live at <output_dir>/sub-<id>[/ses-<x>]/freesurfer,
+            # not in the recon-all staging directory.
+            subject_dir = (
+                subject_output_dir(output_dir, participant_label, _session_for_output)
+                / "freesurfer"
+            )
             done_marker = subject_dir / "scripts" / "recon-all.done"
 
             if not subject_dir.exists():
@@ -421,8 +470,7 @@ def process_participant(
 
     if success and not skip_nidm:
         nidm_conversion(
-            nidm_dir,
-            freesurfer_dir,
+            output_dir,
             participant_label,
             freesurfer_wrapper,
             bids_session=detected_session,
@@ -460,7 +508,7 @@ def process_session(
         nidm_input_dir (str or None): Path to existing NIDM directory
         verbose (bool): Enable verbose output
     """
-    layout, freesurfer_wrapper, freesurfer_dir, nidm_dir, nidm_input_dir, version_info = initialize(
+    layout, freesurfer_wrapper, freesurfer_dir, nidm_input_dir, version_info = initialize(
         bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir
     )
 
@@ -492,7 +540,13 @@ def process_session(
         if skip_freesurfer:
             # Validate that session-specific FreeSurfer outputs exist.
             fs_output_subject_id = f"{fs_subject_id}_ses-{session_label}"
-            subject_dir = freesurfer_dir / fs_output_subject_id
+            _session_for_output = session_label
+            # Existing outputs live at <output_dir>/sub-<id>[/ses-<x>]/freesurfer,
+            # not in the recon-all staging directory.
+            subject_dir = (
+                subject_output_dir(output_dir, participant_label, _session_for_output)
+                / "freesurfer"
+            )
             done_marker = subject_dir / "scripts" / "recon-all.done"
 
             if not subject_dir.exists():
@@ -527,8 +581,7 @@ def process_session(
 
     if success and not skip_nidm:
         nidm_conversion(
-            nidm_dir,
-            freesurfer_dir,
+            output_dir,
             participant_label,
             freesurfer_wrapper,
             session_label,

@@ -51,10 +51,10 @@ class TestSingleSessionDataset:
             freesurfer_license=license_file
         )
 
-        # For single session, subject ID should remain sub-001 (no _ses- suffix)
-        # This is tested implicitly by checking the FreeSurfer directory structure
-        fs_dir = app_output_dir / "freesurfer"
-        assert fs_dir.exists()
+        # For single session, subject ID should remain sub-001 (no _ses- suffix),
+        # so the per-subject output directory carries no ses- component.
+        assert wrapper.subject_output_dir("sub-001") == app_output_dir / "sub-001"
+        assert (app_output_dir / ".fs_staging").exists()
 
     def test_nidm_naming_single_session(self, tmp_path):
         """Verify NIDM file is named sub-XXX.ttl for single session."""
@@ -288,11 +288,13 @@ class TestBABSIntegration:
     def test_participant_skip_freesurfer_uses_session_directory(self, tmp_path, bids_multi_session):
         """Verify a BABS participant invocation resumes the requested session."""
         output_dir = tmp_path / "output"
+        # Per-subject layout: existing outputs live at
+        # <output_dir>/sub-<id>/ses-<x>/freesurfer, not under an app-name wrapper.
         done_marker = (
             output_dir
-            / "freesurfer-nidm_bidsapp"
+            / "sub-001"
+            / "ses-baseline"
             / "freesurfer"
-            / "sub-001_ses-baseline"
             / "scripts"
             / "recon-all.done"
         )
