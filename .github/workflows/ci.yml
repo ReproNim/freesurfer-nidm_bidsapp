@@ -94,7 +94,9 @@ jobs:
         docker build -t bids/freesurfer:test .
 
         # Then build Singularity image from the Docker image
-        singularity build --disable-cache freesurfer.sif Singularity
+        # --fakeroot: building from a definition file needs root (or fakeroot);
+        # the runner user is not root. GitHub-hosted runners support fakeroot.
+        singularity build --fakeroot --disable-cache freesurfer.sif Singularity
 
         # Verify the image was built
         ls -lah freesurfer.sif
