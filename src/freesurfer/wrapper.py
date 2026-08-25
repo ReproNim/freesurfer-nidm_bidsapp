@@ -24,6 +24,11 @@ from src.utils import get_freesurfer_version, get_version_info
 # Configure logging
 logger = logging.getLogger("freesurfer-bidsapp.wrapper")
 
+# BIDS specification version this app's derivatives conform to. This is the spec
+# version, not the version of any library -- pybids' __version__ (e.g. "0.16.4")
+# is a library version and is not a valid BIDSVersion value.
+BIDS_VERSION = "1.8.0"
+
 
 class FreeSurferWrapper:
     """Wrapper for FreeSurfer's recon-all command."""
@@ -400,17 +405,11 @@ class FreeSurferWrapper:
         if not desc_file.exists():
             # Get version information from utils
             version_info = get_version_info()
-            
-            # Get BIDS version from pybids
-            try:
-                from bids import __version__ as bids_version
-            except ImportError:
-                bids_version = "1.4.0"  # Fallback to default if pybids not available
-                
+
             with open(desc_file, "w") as f:
                 json.dump({
                     "Name": "FreeSurfer Derivatives",
-                    "BIDSVersion": bids_version,
+                    "BIDSVersion": BIDS_VERSION,
                     "DatasetType": "derivative",
                     "GeneratedBy": [
                         {
