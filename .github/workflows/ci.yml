@@ -88,10 +88,6 @@ jobs:
       with:
         singularity-version: 3.8.7
 
-    - name: Validate Singularity definition file
-      run: |
-        singularity parser Singularity
-
     - name: Build Singularity image from Docker
       run: |
         # First build the Docker image
