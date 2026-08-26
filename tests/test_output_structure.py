@@ -138,6 +138,16 @@ class TestDatasetDescription:
         assert "DatasetType" in desc
         assert desc["DatasetType"] == "derivative"
 
+        # BIDSVersion must be the BIDS *spec* version, not a library version.
+        # This previously reported pybids' __version__ (e.g. "0.16.4"), which is
+        # not a valid BIDSVersion.
+        from src.freesurfer.wrapper import BIDS_VERSION
+
+        assert desc["BIDSVersion"] == BIDS_VERSION
+        assert desc["BIDSVersion"].startswith("1."), (
+            f"BIDSVersion {desc['BIDSVersion']!r} does not look like a BIDS spec version"
+        )
+
     def test_dataset_description_generated_by(self, tmp_path, bids_single_session):
         """Verify dataset_description.json includes GeneratedBy with correct app name."""
         output_dir = tmp_path / "output"

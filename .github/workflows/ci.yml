@@ -14,6 +14,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+      with:
+        # src/segstats_jsonld is a submodule; Dockerfile/Singularity pip install -e
+        # it, so an unpopulated checkout fails the image builds.
+        submodules: recursive
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -42,10 +46,18 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     needs: test
-    if: "github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip CI]')"
+    # Runs on PRs too, not just push-to-main: this is what actually exercises the
+    # image build (the submodule checkout above only fixed the build, it doesn't
+    # prove it). head_commit only exists on push events, so the skip-CI check is
+    # scoped to push and always runs on pull_request.
+    if: "github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip CI]')"
 
     steps:
     - uses: actions/checkout@v3
+      with:
+        # src/segstats_jsonld is a submodule; Dockerfile/Singularity pip install -e
+        # it, so an unpopulated checkout fails the image builds.
+        submodules: recursive
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v2
@@ -63,19 +75,23 @@ jobs:
   singularity:
     runs-on: ubuntu-latest
     needs: docker
-    if: "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    # Disabled: singularity build hangs for hours on GH-hosted runners rather
+    # than failing -- see issue #12. Actual .sif builds are produced and
+    # validated on our HPC cluster directly, not by this job.
+    if: false
+    timeout-minutes: 30
 
     steps:
     - uses: actions/checkout@v3
+      with:
+        # src/segstats_jsonld is a submodule; Dockerfile/Singularity pip install -e
+        # it, so an unpopulated checkout fails the image builds.
+        submodules: recursive
 
     - name: Set up Singularity
       uses: eWaterCycle/setup-singularity@v7
       with:
         singularity-version: 3.8.7
-
-    - name: Validate Singularity definition file
-      run: |
-        singularity parser Singularity
 
     - name: Build Singularity image from Docker
       run: |
@@ -83,7 +99,9 @@ jobs:
         docker build -t bids/freesurfer:test .
 
         # Then build Singularity image from the Docker image
-        singularity build --disable-cache freesurfer.sif Singularity
+        # --fakeroot: building from a definition file needs root (or fakeroot);
+        # the runner user is not root. GitHub-hosted runners support fakeroot.
+        singularity build --fakeroot --disable-cache freesurfer.sif Singularity
 
         # Verify the image was built
         ls -lah freesurfer.sif
