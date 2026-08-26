@@ -75,6 +75,11 @@ jobs:
   singularity:
     runs-on: ubuntu-latest
     needs: docker
+    # Disabled: singularity build hangs for hours on GH-hosted runners rather
+    # than failing -- see issue #12. Actual .sif builds are produced and
+    # validated on our HPC cluster directly, not by this job.
+    if: false
+    timeout-minutes: 30
 
     steps:
     - uses: actions/checkout@v3
