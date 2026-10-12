@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 import time
 
+import nibabel as nib
 from bids import BIDSLayout
 from src.utils import get_freesurfer_version, get_version_info
 
@@ -29,6 +30,21 @@ logger = logging.getLogger("freesurfer-bidsapp.wrapper")
 # version, not the version of any library -- pybids' __version__ (e.g. "0.16.4")
 # is a library version and is not a valid BIDSVersion value.
 BIDS_VERSION = "1.8.0"
+
+
+# Default limit on any voxel dimension of an anatomical input, in mm. recon-all
+# on a thick-slab image (e.g. ABIDE II UCLA_Long acq-hires, 1.5x1.5x4.0 mm)
+# exits 0 with a meaningless reconstruction, so such inputs are refused.
+DEFAULT_MAX_VOXEL_SIZE = 2.0
+
+
+def voxel_size(path):
+    """Voxel dimensions (mm) of the first three axes of an image header."""
+    return tuple(float(z) for z in nib.load(str(path)).header.get_zooms()[:3])
+
+
+def _format_size(zooms):
+    return "x".join(str(round(z, 3)) for z in zooms)
 
 
 def _entity(path, name):
@@ -91,7 +107,8 @@ def select_single_image(paths):
 class FreeSurferWrapper:
     """Wrapper for FreeSurfer's recon-all command."""
 
-    def __init__(self, bids_dir, output_dir, freesurfer_license=None):
+    def __init__(self, bids_dir, output_dir, freesurfer_license=None,
+                 max_voxel_size=DEFAULT_MAX_VOXEL_SIZE):
         """
         Initialize FreeSurfer wrapper.
 
@@ -103,6 +120,8 @@ class FreeSurferWrapper:
             Path to output derivatives directory
         freesurfer_license : str or Path, optional
             Path to FreeSurfer license file
+        max_voxel_size : float, optional
+            Largest voxel dimension (mm) accepted for a T1w/T2w input
         """
         self.bids_dir = Path(bids_dir)
         self.output_dir = Path(output_dir)
@@ -112,6 +131,7 @@ class FreeSurferWrapper:
         # Dot-prefixed and outside sub-<id>/, so BABS never zips it.
         self.freesurfer_dir = self.output_dir / ".fs_staging"
         self.freesurfer_license = freesurfer_license
+        self.max_voxel_size = float(max_voxel_size)
 
         # Track processing results and image information
         self.results = {"success": [], "failure": [], "skipped": []}
@@ -246,6 +266,9 @@ class FreeSurferWrapper:
             fs_subject_id = f"{subject_id}_ses-{session_label}" if session_label else subject_id
             info = self._select_inputs(layout, bids_subject, bids_session, fs_subject_id)
             t1w_images = info['T1w_images']
+            if info.get('failure_reason'):
+                self.results["failure"].append(fs_subject_id)
+                return False
             if not t1w_images:
                 logger.error(f"No T1w images found for {subject_id}" +
                            (f" session {session_label}" if session_label else ""))
@@ -344,38 +367,98 @@ class FreeSurferWrapper:
         """
         Find T1w/T2w images and choose which ones recon-all uses.
 
-        Logs the chosen and excluded files and records both, relative to the
-        BIDS root, in self.last_inputs for the processing summary.
+        Selection follows select_t1w_inputs / select_single_image, then drops
+        any chosen image with a voxel dimension above self.max_voxel_size. If
+        every chosen T1w is too coarse the subject cannot be processed and
+        'failure_reason' is set; a too-coarse T2w is only skipped. Chosen and
+        excluded files are logged and recorded, relative to the BIDS root, in
+        self.last_inputs for the processing summary.
 
         Returns
         -------
         dict
-            'T1w_images' (chosen, may be empty) and, if a T2w exists,
-            'T2w_images' (a single chosen image).
+            'T1w_images' (chosen, may be empty), 'T2w_images' (a single chosen
+            image, if any) and 'failure_reason' (if no T1w is usable).
         """
         t1w_found = [str(img) for img in self._find_images(layout, bids_subject, "T1w", bids_session)]
-        t1w_images, not_used = select_t1w_inputs(t1w_found)
+        t1w_selected, t1w_excluded = select_t1w_inputs(t1w_found)
+        acq_used = _entity(t1w_selected[0], "acq") if t1w_selected else None
+        not_used = [
+            (p, f"acq-{_entity(p, 'acq')} variant; using "
+                + (f"acq-{acq_used}" if acq_used else "T1w without acq-"))
+            for p in t1w_excluded
+        ]
+
+        t1w_images = []
+        too_coarse = []
+        for img in t1w_selected:
+            reason = self._too_coarse(img)
+            if reason:
+                logger.warning(f"Not using T1w {img} for {fs_subject_id}: {reason}")
+                not_used.append((img, reason))
+                too_coarse.append(img)
+            else:
+                t1w_images.append(img)
         info = {'T1w_images': t1w_images}
 
+        failure_reason = None
+        if too_coarse and not t1w_images:
+            failure_reason = (
+                f"No T1w within --max-voxel-size {self.max_voxel_size} mm: "
+                + ", ".join(
+                    f"{Path(p).name} ({_format_size(voxel_size(p))} mm)" for p in too_coarse
+                )
+            )
+            logger.error(f"{fs_subject_id}: {failure_reason}; not running recon-all")
+            info['failure_reason'] = failure_reason
+
         t2w_found = [str(img) for img in self._find_images(layout, bids_subject, "T2w", bids_session)]
-        t2w_image, t2w_not_used = select_single_image(t2w_found)
+        t2w_image, t2w_excluded = select_single_image(t2w_found)
+        not_used += [(p, f"only one T2w is used; chose {Path(t2w_image).name}") for p in t2w_excluded]
         if t2w_image:
-            info['T2w_images'] = [t2w_image]
-        not_used += t2w_not_used
+            reason = self._too_coarse(t2w_image)
+            if reason:
+                logger.warning(f"Not using T2w {t2w_image} for {fs_subject_id}: {reason}")
+                not_used.append((t2w_image, reason))
+                t2w_image = None
+            else:
+                info['T2w_images'] = [t2w_image]
 
         for img in t1w_images:
             logger.info(f"Using T1w for {fs_subject_id}: {img}")
         if t2w_image:
             logger.info(f"Using T2w for {fs_subject_id}: {t2w_image}")
-        for img in not_used:
-            logger.info(f"Not using {img} for {fs_subject_id}")
+        for img, reason in not_used:
+            logger.info(f"Not using {img} for {fs_subject_id} ({reason})")
 
         used = t1w_images + ([t2w_image] if t2w_image else [])
         self.last_inputs = {
             "input_files": [self._bids_relative(p) for p in used],
-            "inputs_not_used": [self._bids_relative(p) for p in not_used],
+            "inputs_not_used": [
+                {"path": self._bids_relative(p), "reason": reason} for p, reason in not_used
+            ],
         }
+        if failure_reason:
+            self.last_inputs["failure_reason"] = failure_reason
         return info
+
+    def _too_coarse(self, path):
+        """Reason string if any voxel dimension exceeds the limit, else None.
+
+        An unreadable header is not treated as too coarse: recon-all reports
+        that failure itself.
+        """
+        try:
+            zooms = voxel_size(path)
+        except Exception as e:
+            logger.warning(f"Could not read voxel size of {path}: {e}")
+            return None
+        if max(zooms) > self.max_voxel_size:
+            return (
+                f"voxel size {_format_size(zooms)} mm exceeds "
+                f"--max-voxel-size {self.max_voxel_size} mm"
+            )
+        return None
 
     def _bids_relative(self, path):
         """Path relative to the BIDS root, or the path unchanged if outside it."""

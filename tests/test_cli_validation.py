@@ -339,3 +339,34 @@ class TestNIDMInputDirFlag:
 
             # Command should process successfully
             assert mock_wrapper.called
+
+
+class TestMaxVoxelSize:
+    """--max-voxel-size reaches the wrapper; a failed subject exits non-zero."""
+
+    def _invoke(self, bids_dir, output_dir, *extra, success=True):
+        runner = CliRunner()
+        with patch('src.run.FreeSurferWrapper') as mock_wrapper, \
+             patch('src.run.subprocess.run'):
+            mock_wrapper.return_value.process_subject.return_value = success
+            mock_wrapper.return_value.get_processing_summary.return_value = {}
+            result = runner.invoke(cli, [
+                str(bids_dir), str(output_dir), 'participant',
+                '--participant-label', '001', '--skip-bids-validation', '--skip-nidm',
+                *extra,
+            ])
+        return result, mock_wrapper
+
+    def test_default_limit(self, tmp_path, bids_single_session):
+        result, mock_wrapper = self._invoke(bids_single_session, tmp_path / "out")
+        assert result.exit_code == 0, result.output
+        assert mock_wrapper.call_args.kwargs["max_voxel_size"] == 2.0
+
+    def test_custom_limit(self, tmp_path, bids_single_session):
+        result, mock_wrapper = self._invoke(bids_single_session, tmp_path / "out", '--max-voxel-size', '3.5')
+        assert result.exit_code == 0, result.output
+        assert mock_wrapper.call_args.kwargs["max_voxel_size"] == 3.5
+
+    def test_failed_subject_exits_non_zero(self, tmp_path, bids_single_session):
+        result, _ = self._invoke(bids_single_session, tmp_path / "out", success=False)
+        assert result.exit_code != 0

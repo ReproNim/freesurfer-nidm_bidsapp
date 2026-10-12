@@ -374,10 +374,11 @@ def test_process_subject_excludes_acq_variants_and_records_inputs(
             "sub-001/ses-1/anat/sub-001_ses-1_run-1_T1w.nii.gz",
             "sub-001/ses-1/anat/sub-001_ses-1_run-1_T2w.nii.gz",
         ]
-        assert summary["inputs_not_used"] == [
+        assert [entry["path"] for entry in summary["inputs_not_used"]] == [
             "sub-001/ses-1/anat/sub-001_ses-1_acq-hires_run-1_T1w.nii.gz",
             "sub-001/ses-1/anat/sub-001_ses-1_run-2_T2w.nii.gz",
         ]
+        assert "acq-" in summary["inputs_not_used"][0]["reason"]
 
 
 def test_record_subject_images_applies_same_selection(
@@ -395,3 +396,130 @@ def test_record_subject_images_applies_same_selection(
 
     assert info["T1w_images"] == [str(anat / "sub-001_ses-1_run-1_T1w.nii.gz")]
     assert info["T2w_images"] == [str(anat / "sub-001_ses-1_run-1_T2w.nii.gz")]
+
+
+# --- Voxel-size limit ----------------------------------------------------------
+# ABIDE II UCLA_Long acq-hires T1w images are 1.5x1.5x4.0 mm slabs, not high
+# resolution. recon-all on such an image exits 0 with a meaningless result, so
+# images coarser than --max-voxel-size are refused before it runs.
+
+FINE = (1.2, 1.0, 1.0)
+SLAB = (1.5, 1.5, 4.0)
+
+
+def _layout(anat, t1w, t2w=()):
+    files = {"T1w": [str(anat / f) for f in t1w], "T2w": [str(anat / f) for f in t2w]}
+    layout = MagicMock()
+    layout.get.side_effect = lambda **kwargs: list(files.get(kwargs.get("suffix"), []))
+    return layout
+
+
+def _zooms(sizes):
+    """voxel_size stand-in: look the file name up in sizes."""
+    return lambda path: sizes[Path(path).name]
+
+
+def _wrapper(bids_dataset, output_dir, freesurfer_license, **kwargs):
+    return FreeSurferWrapper(
+        str(bids_dataset), str(output_dir), freesurfer_license=str(freesurfer_license), **kwargs
+    )
+
+
+def _fake_recon_all(wrapper, fs_subject_id):
+    def run(cmd, *args, **kwargs):
+        staged = wrapper.freesurfer_dir / fs_subject_id
+        (staged / "scripts").mkdir(parents=True, exist_ok=True)
+        (staged / "scripts" / "recon-all.done").write_text("")
+        return MagicMock(returncode=0)
+    return run
+
+
+def test_coarse_t1w_run_is_dropped_when_another_run_passes(bids_dataset, output_dir, freesurfer_license):
+    """A too-coarse run is left out with a recorded reason; the others still go to recon-all."""
+    anat = bids_dataset / "sub-001" / "anat"
+    layout = _layout(anat, ["sub-001_run-1_T1w.nii.gz", "sub-001_run-2_T1w.nii.gz"])
+    sizes = {"sub-001_run-1_T1w.nii.gz": SLAB, "sub-001_run-2_T1w.nii.gz": FINE}
+    with patch.dict(os.environ, {"FREESURFER_HOME": "/opt/freesurfer"}):
+        wrapper = _wrapper(bids_dataset, output_dir, freesurfer_license)
+        with patch("src.freesurfer.wrapper.voxel_size", side_effect=_zooms(sizes)), \
+             patch("subprocess.run", side_effect=_fake_recon_all(wrapper, "sub-001")) as mock_run:
+            assert wrapper.process_subject("sub-001", layout)
+            cmd = mock_run.call_args[0][0]
+
+    inputs = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-i"]
+    assert inputs == [str(anat / "sub-001_run-2_T1w.nii.gz")]
+    summary = wrapper.get_processing_summary()
+    assert summary["input_files"] == ["sub-001/anat/sub-001_run-2_T1w.nii.gz"]
+    dropped = summary["inputs_not_used"]
+    assert [entry["path"] for entry in dropped] == ["sub-001/anat/sub-001_run-1_T1w.nii.gz"]
+    assert "4.0" in dropped[0]["reason"] and "2.0" in dropped[0]["reason"]
+    assert "failure_reason" not in summary
+
+
+def test_subject_fails_when_every_t1w_is_too_coarse(bids_dataset, output_dir, freesurfer_license):
+    """UCLA_Long ses-1 with only acq-hires: recon-all never runs and the reason is recorded."""
+    anat = bids_dataset / "sub-001" / "ses-1" / "anat"
+    name = "sub-001_ses-1_acq-hires_run-1_T1w.nii.gz"
+    layout = _layout(anat, [name])
+    with patch.dict(os.environ, {"FREESURFER_HOME": "/opt/freesurfer"}):
+        wrapper = _wrapper(bids_dataset, output_dir, freesurfer_license)
+        with patch("src.freesurfer.wrapper.voxel_size", side_effect=_zooms({name: SLAB})), \
+             patch("subprocess.run") as mock_run:
+            assert wrapper.process_subject("sub-001", layout, session_label="1") is False
+            mock_run.assert_not_called()
+
+    assert "sub-001_ses-1" in wrapper.results["failure"]
+    summary = wrapper.get_processing_summary()
+    assert summary["input_files"] == []
+    assert [entry["path"] for entry in summary["inputs_not_used"]] == [f"sub-001/ses-1/anat/{name}"]
+    assert name in summary["failure_reason"]
+    assert "1.5x1.5x4.0" in summary["failure_reason"]
+
+
+def test_coarse_t2w_is_skipped_not_fatal(bids_dataset, output_dir, freesurfer_license):
+    """A too-coarse T2w is left out; recon-all runs on the T1w alone."""
+    anat = bids_dataset / "sub-001" / "anat"
+    layout = _layout(anat, ["sub-001_T1w.nii.gz"], ["sub-001_T2w.nii.gz"])
+    sizes = {"sub-001_T1w.nii.gz": FINE, "sub-001_T2w.nii.gz": SLAB}
+    with patch.dict(os.environ, {"FREESURFER_HOME": "/opt/freesurfer"}):
+        wrapper = _wrapper(bids_dataset, output_dir, freesurfer_license)
+        with patch("src.freesurfer.wrapper.voxel_size", side_effect=_zooms(sizes)), \
+             patch("subprocess.run", side_effect=_fake_recon_all(wrapper, "sub-001")) as mock_run:
+            assert wrapper.process_subject("sub-001", layout)
+            cmd = mock_run.call_args[0][0]
+
+    assert "-T2" not in cmd and "-T2pial" not in cmd
+    summary = wrapper.get_processing_summary()
+    assert summary["input_files"] == ["sub-001/anat/sub-001_T1w.nii.gz"]
+    assert [entry["path"] for entry in summary["inputs_not_used"]] == ["sub-001/anat/sub-001_T2w.nii.gz"]
+
+
+def test_max_voxel_size_is_configurable(bids_dataset, output_dir, freesurfer_license):
+    """Raising the limit admits the slab (an explicit opt-in)."""
+    anat = bids_dataset / "sub-001" / "anat"
+    layout = _layout(anat, ["sub-001_T1w.nii.gz"])
+    with patch.dict(os.environ, {"FREESURFER_HOME": "/opt/freesurfer"}):
+        wrapper = _wrapper(bids_dataset, output_dir, freesurfer_license, max_voxel_size=4.0)
+        assert wrapper.max_voxel_size == 4.0
+        with patch("src.freesurfer.wrapper.voxel_size", side_effect=_zooms({"sub-001_T1w.nii.gz": SLAB})), \
+             patch("subprocess.run", side_effect=_fake_recon_all(wrapper, "sub-001")):
+            assert wrapper.process_subject("sub-001", layout)
+
+
+def test_default_max_voxel_size(bids_dataset, output_dir, freesurfer_license):
+    with patch.dict(os.environ, {"FREESURFER_HOME": "/opt/freesurfer"}):
+        assert _wrapper(bids_dataset, output_dir, freesurfer_license).max_voxel_size == 2.0
+
+
+def test_voxel_size_reads_header_zooms(tmp_path):
+    """voxel_size returns the first three zooms of a NIfTI header."""
+    import nibabel as nib
+    import numpy as np
+
+    img = nib.Nifti1Image(np.zeros((4, 4, 2, 3), dtype=np.uint8), np.eye(4))
+    img.header.set_zooms((1.5, 1.5, 4.0, 2.0))
+    path = tmp_path / "sub-001_T1w.nii.gz"
+    nib.save(img, str(path))
+
+    from src.freesurfer.wrapper import voxel_size
+    assert voxel_size(path) == (1.5, 1.5, 4.0)

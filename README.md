@@ -122,6 +122,7 @@ apptainer run \
   - `--skip-freesurfer`: Reuse a completed `recon-all` directory and run only the remaining export steps.
   - `--skip-nidm`: Skip NIDM output generation.
   - `--nidm-input-dir`: Directory containing an existing NIDM document to augment.
+  - `--max-voxel-size`: Largest voxel dimension in mm accepted for a T1w/T2w input (default `2.0`). See [Input images](#input-images).
   - `--verbose`: Enable debug logging.
 
 ### Input images
@@ -131,7 +132,9 @@ The app looks for T1w and T2w images in the subject's `anat/` directory (restric
 - **T1w.** Every T1w without an `acq-` entity is used; `recon-all` averages them, so repeated runs of the same acquisition are combined. If such images exist, every `acq-` variant is left out (for example, ABIDE II UCLA_Long sessions hold both `sub-X_ses-N_run-1_T1w` and `sub-X_ses-N_acq-hires_run-1_T1w`; only the first is used). If only `acq-` variants exist, all runs of the alphabetically first `acq` label are used. Acquisitions are never mixed.
 - **T2w.** `recon-all` takes one T2w (`-T2 ... -T2pial`). The app picks an image without `acq-` first, then the lowest run, then the first file name.
 
-The chosen and excluded files are logged, and `processing_summary.json` records them as `input_files` and `inputs_not_used` (paths relative to the BIDS root).
+- **Voxel size.** Every chosen image is checked against `--max-voxel-size` (default `2.0` mm, applied to each of the three voxel dimensions in the header). A T1w run above the limit is dropped with a warning as long as another chosen T1w passes. If none passes, `recon-all` is not run, the subject is marked failed and the app exits non-zero. A T2w above the limit is skipped and `recon-all` runs on the T1w alone. The check exists because some images labelled high resolution are thick slabs: ABIDE II UCLA_Long `acq-hires` T1w images are 1.5x1.5x4.0 mm, and `recon-all` on such an image can finish without error and still produce a meaningless reconstruction. The selection above runs first, so a session whose only T1w is a too-coarse `acq-` variant fails rather than falling back to it.
+
+The chosen and excluded files are logged. `processing_summary.json` records them as `input_files` and `inputs_not_used` (paths relative to the BIDS root, each excluded file with its `reason`), plus a `failure_reason` when no T1w could be used.
 
 ### Examples
 

@@ -16,7 +16,7 @@ from pathlib import Path
 import click
 
 from bids import BIDSLayout
-from src.freesurfer.wrapper import FreeSurferWrapper
+from src.freesurfer.wrapper import DEFAULT_MAX_VOXEL_SIZE, FreeSurferWrapper
 from src.utils import get_app_version, get_version_info, setup_logging
 from rdflib import Graph
 
@@ -43,7 +43,8 @@ def _log_version_info(version_info):
             logger.info(f"  {package}: {version}")
 
 
-def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir=None):
+def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir=None,
+               max_voxel_size=DEFAULT_MAX_VOXEL_SIZE):
     """Initialize the BIDS-FreeSurfer app.
     Args:
         bids_dir (str): Path to BIDS root directory
@@ -52,6 +53,7 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
         skip_bids_validation (bool): Skip BIDS validation
         verbose (bool): Enable verbose output
         nidm_input_dir (str or None): Path to existing NIDM directory (defaults to <bids_dir>/../NIDM)
+        max_voxel_size (float): Largest voxel dimension (mm) accepted for an anatomical input
     """
     # Convert paths to Path objects
     bids_dir = Path(bids_dir)
@@ -103,6 +105,7 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
             bids_dir,
             app_output_dir,  # Pass the app_output_dir to FreeSurferWrapper
             freesurfer_license,
+            max_voxel_size=max_voxel_size,
         )
         freesurfer_wrapper.nidm_input_dir = nidm_input_dir
     except Exception as e:
@@ -365,6 +368,7 @@ def process_participant(
     skip_nidm,
     nidm_input_dir,
     verbose,
+    max_voxel_size=DEFAULT_MAX_VOXEL_SIZE,
 ):
     """Process a single participant with FreeSurfer.
 
@@ -379,9 +383,11 @@ def process_participant(
         skip_nidm (bool): Skip NIDM export
         nidm_input_dir (str or None): Path to existing NIDM directory
         verbose (bool): Enable verbose output
+        max_voxel_size (float): Largest voxel dimension (mm) accepted for an anatomical input
     """
     layout, freesurfer_wrapper, freesurfer_dir, nidm_input_dir, version_info = initialize(
-        bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir
+        bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir,
+        max_voxel_size,
     )
 
     # Strip "sub-" prefix if present (BABS may pass it with the prefix)
@@ -468,6 +474,12 @@ def process_participant(
         logger.error(f"Error during processing: {str(e)}")
         sys.exit(1)
 
+    if not success:
+        # The reason is in the log and in processing_summary.json. Exit non-zero
+        # so a scheduler (e.g. BABS) does not count the job as done.
+        logger.error("FreeSurfer processing failed; see processing_summary.json")
+        sys.exit(1)
+
     if success and not skip_nidm:
         nidm_conversion(
             output_dir,
@@ -493,6 +505,7 @@ def process_session(
     skip_nidm,
     nidm_input_dir,
     verbose,
+    max_voxel_size=DEFAULT_MAX_VOXEL_SIZE,
 ):
     """Process a single session for a participant with FreeSurfer.
 
@@ -507,9 +520,11 @@ def process_session(
         skip_nidm (bool): Skip NIDM export
         nidm_input_dir (str or None): Path to existing NIDM directory
         verbose (bool): Enable verbose output
+        max_voxel_size (float): Largest voxel dimension (mm) accepted for an anatomical input
     """
     layout, freesurfer_wrapper, freesurfer_dir, nidm_input_dir, version_info = initialize(
-        bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir
+        bids_dir, freesurfer_license, output_dir, skip_bids_validation, verbose, nidm_input_dir,
+        max_voxel_size,
     )
 
     # Strip "sub-" prefix if present (BABS may pass it with the prefix)
@@ -579,6 +594,12 @@ def process_session(
         logger.error(f"Error during processing: {str(e)}")
         sys.exit(1)
 
+    if not success:
+        # The reason is in the log and in processing_summary.json. Exit non-zero
+        # so a scheduler (e.g. BABS) does not count the job as done.
+        logger.error("FreeSurfer processing failed; see processing_summary.json")
+        sys.exit(1)
+
     if success and not skip_nidm:
         nidm_conversion(
             output_dir,
@@ -633,6 +654,16 @@ def process_session(
     default=None,
     help="Path to existing NIDM files directory. Defaults to <bids_dir>/../NIDM for BABS workflows.",
 )
+@click.option(
+    "--max-voxel-size",
+    type=click.FloatRange(min=0, min_open=True),
+    default=DEFAULT_MAX_VOXEL_SIZE,
+    show_default=True,
+    help=(
+        "Largest voxel dimension (mm) accepted for a T1w/T2w input. Coarser T1w runs are "
+        "dropped (the subject fails if none remain); a coarser T2w is skipped."
+    ),
+)
 @click.option("--verbose", is_flag=True, help="Enable verbose output.")
 def cli(
     bids_dir,
@@ -645,6 +676,7 @@ def cli(
     skip_freesurfer,
     skip_nidm,
     nidm_input_dir,
+    max_voxel_size,
     verbose,
 ):
     """FreeSurfer BIDS App with NIDM Output.
@@ -678,6 +710,7 @@ def cli(
             skip_nidm,
             nidm_input_dir,
             verbose,
+            max_voxel_size,
         )
     elif analysis_level == "session":
         if not participant_label or not session_label:
@@ -694,6 +727,7 @@ def cli(
             skip_nidm,
             nidm_input_dir,
             verbose,
+            max_voxel_size,
         )
 
 
