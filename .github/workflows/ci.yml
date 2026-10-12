@@ -59,6 +59,14 @@ jobs:
         # it, so an unpopulated checkout fails the image builds.
         submodules: recursive
 
+    # load: true below copies the built image into the Docker daemon so its
+    # labels can be checked, and the FreeSurfer image is large enough that the
+    # second copy filled the runner's disk. Same cleanup as the ants app's CI.
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        df -h
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v2
 
