@@ -10,6 +10,7 @@ BIDS-compliant structure.
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,63 @@ logger = logging.getLogger("freesurfer-bidsapp.wrapper")
 # version, not the version of any library -- pybids' __version__ (e.g. "0.16.4")
 # is a library version and is not a valid BIDSVersion value.
 BIDS_VERSION = "1.8.0"
+
+
+def _entity(path, name):
+    """Value of a BIDS entity (e.g. 'acq', 'run') in a file name, or None."""
+    match = re.search(rf"(?:^|_){name}-([a-zA-Z0-9]+)(?=_)", Path(str(path)).name)
+    return match.group(1) if match else None
+
+
+def _run_sort_key(path):
+    """Order by run number (numerically; no run first), then by file name."""
+    run = _entity(path, "run")
+    return (int(run) if run and run.isdigit() else -1, Path(str(path)).name)
+
+
+def select_t1w_inputs(paths):
+    """
+    Choose which T1w images go to recon-all.
+
+    recon-all averages every -i image, which is right for repeated runs of one
+    acquisition but not for different acquisitions (e.g. ABIDE II UCLA_Long
+    sessions hold both a standard and an acq-hires T1w). If any T1w without an
+    acq- entity exists, use all of those and none of the acq- variants;
+    otherwise use every run of the alphabetically first acq label.
+
+    Returns
+    -------
+    tuple of (list, list)
+        Chosen images ordered by run, and the excluded images.
+    """
+    paths = list(paths)
+    plain = [p for p in paths if _entity(p, "acq") is None]
+    if plain:
+        chosen = plain
+    elif paths:
+        first_acq = min(_entity(p, "acq") for p in paths)
+        chosen = [p for p in paths if _entity(p, "acq") == first_acq]
+    else:
+        chosen = []
+    excluded = [p for p in paths if p not in chosen]
+    return sorted(chosen, key=_run_sort_key), sorted(excluded, key=lambda p: Path(str(p)).name)
+
+
+def select_single_image(paths):
+    """
+    Choose one image where recon-all takes only one (e.g. -T2).
+
+    Preference: no acq- entity, then lowest run, then file name.
+
+    Returns
+    -------
+    tuple of (str or None, list)
+        The chosen image and the excluded images.
+    """
+    if not paths:
+        return None, []
+    ordered = sorted(paths, key=lambda p: (_entity(p, "acq") is not None,) + _run_sort_key(p))
+    return ordered[0], sorted(ordered[1:], key=lambda p: Path(str(p)).name)
 
 
 class FreeSurferWrapper:
@@ -62,6 +120,9 @@ class FreeSurferWrapper:
         # Set once a subject is handled, so the processing summary can be written
         # inside that subject's directory (BABS zips only sub-<id>/).
         self.last_subject_dir = None
+        # Inputs chosen for (and left out of) the last subject, relative to the
+        # BIDS root, for the processing summary.
+        self.last_inputs = None
 
         # Ensure output directories exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -182,7 +243,9 @@ class FreeSurferWrapper:
                     bids_session = session_label
 
             # Find T1w and T2w images
-            t1w_images = self._find_images(layout, bids_subject, "T1w", bids_session)
+            fs_subject_id = f"{subject_id}_ses-{session_label}" if session_label else subject_id
+            info = self._select_inputs(layout, bids_subject, bids_session, fs_subject_id)
+            t1w_images = info['T1w_images']
             if not t1w_images:
                 logger.error(f"No T1w images found for {subject_id}" +
                            (f" session {session_label}" if session_label else ""))
@@ -191,17 +254,9 @@ class FreeSurferWrapper:
                 return False
 
             # Store T1 image information
-            fs_subject_id = f"{subject_id}_ses-{session_label}" if session_label else subject_id
-            self.subject_t1_mapping[fs_subject_id] = {
-                'T1w_images': [str(img) for img in t1w_images],
-                'session': session_label
-            }
-
-            t2w_images = self._find_images(layout, bids_subject, "T2w", bids_session)
-            if t2w_images:
-                logger.info(f"Found {len(t2w_images)} T2w images for {subject_id}" +
-                           (f" session {session_label}" if session_label else ""))
-                self.subject_t1_mapping[fs_subject_id]['T2w_images'] = [str(img) for img in t2w_images]
+            info['session'] = session_label
+            self.subject_t1_mapping[fs_subject_id] = info
+            t2w_images = info.get('T2w_images', [])
 
             # Check if subject already processed. A completed run has already been
             # relocated out of staging, so check the final location; fall back to
@@ -284,6 +339,54 @@ class FreeSurferWrapper:
             query["session"] = session_id
             
         return layout.get(**query)
+
+    def _select_inputs(self, layout, bids_subject, bids_session, fs_subject_id):
+        """
+        Find T1w/T2w images and choose which ones recon-all uses.
+
+        Logs the chosen and excluded files and records both, relative to the
+        BIDS root, in self.last_inputs for the processing summary.
+
+        Returns
+        -------
+        dict
+            'T1w_images' (chosen, may be empty) and, if a T2w exists,
+            'T2w_images' (a single chosen image).
+        """
+        t1w_found = [str(img) for img in self._find_images(layout, bids_subject, "T1w", bids_session)]
+        t1w_images, not_used = select_t1w_inputs(t1w_found)
+        info = {'T1w_images': t1w_images}
+
+        t2w_found = [str(img) for img in self._find_images(layout, bids_subject, "T2w", bids_session)]
+        t2w_image, t2w_not_used = select_single_image(t2w_found)
+        if t2w_image:
+            info['T2w_images'] = [t2w_image]
+        not_used += t2w_not_used
+
+        for img in t1w_images:
+            logger.info(f"Using T1w for {fs_subject_id}: {img}")
+        if t2w_image:
+            logger.info(f"Using T2w for {fs_subject_id}: {t2w_image}")
+        for img in not_used:
+            logger.info(f"Not using {img} for {fs_subject_id}")
+
+        used = t1w_images + ([t2w_image] if t2w_image else [])
+        self.last_inputs = {
+            "input_files": [self._bids_relative(p) for p in used],
+            "inputs_not_used": [self._bids_relative(p) for p in not_used],
+        }
+        return info
+
+    def _bids_relative(self, path):
+        """Path relative to the BIDS root, or the path unchanged if outside it."""
+        path = Path(path)
+        for root in (self.bids_dir, self.bids_dir.resolve()):
+            for candidate in (path, path.resolve()):
+                try:
+                    return str(candidate.relative_to(root))
+                except ValueError:
+                    continue
+        return str(path)
 
     def _copy_file(self, src, dest):
         """Copy file if it exists."""
@@ -445,7 +548,7 @@ For more information about FreeSurfer, visit: http://surfer.nmr.mgh.harvard.edu/
 
     def get_processing_summary(self):
         """Get summary of processing results."""
-        return {
+        summary = {
             "total": len(self.results["success"]) + len(self.results["failure"]) + len(self.results["skipped"]),
             "success": len(self.results["success"]),
             "failure": len(self.results["failure"]),
@@ -454,6 +557,9 @@ For more information about FreeSurfer, visit: http://surfer.nmr.mgh.harvard.edu/
             "failure_list": self.results["failure"],
             "skipped_list": self.results["skipped"],
         }
+        if self.last_inputs is not None:
+            summary.update(self.last_inputs)
+        return summary
 
     def save_processing_summary(self, summary=None):
         """Save processing summary to JSON file."""
@@ -498,14 +604,8 @@ For more information about FreeSurfer, visit: http://surfer.nmr.mgh.harvard.edu/
             bids_session = bids_session[4:]
 
         fs_subject_id = f"{subject_id}_ses-{bids_session}" if bids_session else subject_id
-        t1w_images = self._find_images(layout, bids_subject, "T1w", bids_session)
-        info = {
-            "T1w_images": [str(img) for img in t1w_images],
-            "session": bids_session,
-        }
-        t2w_images = self._find_images(layout, bids_subject, "T2w", bids_session)
-        if t2w_images:
-            info["T2w_images"] = [str(img) for img in t2w_images]
+        info = self._select_inputs(layout, bids_subject, bids_session, fs_subject_id)
+        info["session"] = bids_session
 
         self.subject_t1_mapping[fs_subject_id] = info
         # --skip-freesurfer reuses an existing reconstruction, so the subject

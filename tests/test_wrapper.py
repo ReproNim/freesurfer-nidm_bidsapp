@@ -10,7 +10,7 @@ import shutil
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from src.freesurfer.wrapper import FreeSurferWrapper
+from src.freesurfer.wrapper import FreeSurferWrapper, select_single_image, select_t1w_inputs
 
 @pytest.fixture
 def bids_dataset(tmp_path):
@@ -256,3 +256,142 @@ def test_save_processing_summary(bids_dataset, output_dir, freesurfer_license):
             assert saved_summary["failure"] == 1
             assert saved_summary["skipped"] == 1
 
+
+
+# --- Input image selection ---------------------------------------------------
+# ABIDE II UCLA_Long sessions hold both a standard T1w and an acq-hires T1w.
+# Runs of one acquisition are averaged by recon-all; different acquisitions
+# must not be.
+
+UCLA_ANAT = "sub-29001/ses-1/anat"
+
+
+def test_select_t1w_prefers_images_without_acq():
+    """Non-acq T1w images win; every acq- variant is excluded."""
+    paths = [
+        f"{UCLA_ANAT}/sub-29001_ses-1_acq-hires_run-1_T1w.nii.gz",
+        f"{UCLA_ANAT}/sub-29001_ses-1_run-2_T1w.nii.gz",
+        f"{UCLA_ANAT}/sub-29001_ses-1_run-1_T1w.nii.gz",
+    ]
+    chosen, excluded = select_t1w_inputs(paths)
+    assert chosen == [
+        f"{UCLA_ANAT}/sub-29001_ses-1_run-1_T1w.nii.gz",
+        f"{UCLA_ANAT}/sub-29001_ses-1_run-2_T1w.nii.gz",
+    ]
+    assert excluded == [f"{UCLA_ANAT}/sub-29001_ses-1_acq-hires_run-1_T1w.nii.gz"]
+
+
+def test_select_t1w_uses_one_acq_label_when_only_variants_exist():
+    """With only acq- variants, use every run of the alphabetically first label."""
+    paths = [
+        f"{UCLA_ANAT}/sub-29001_ses-1_acq-lores_run-1_T1w.nii.gz",
+        f"{UCLA_ANAT}/sub-29001_ses-1_acq-hires_run-2_T1w.nii.gz",
+        f"{UCLA_ANAT}/sub-29001_ses-1_acq-hires_run-1_T1w.nii.gz",
+    ]
+    chosen, excluded = select_t1w_inputs(paths)
+    assert chosen == [
+        f"{UCLA_ANAT}/sub-29001_ses-1_acq-hires_run-1_T1w.nii.gz",
+        f"{UCLA_ANAT}/sub-29001_ses-1_acq-hires_run-2_T1w.nii.gz",
+    ]
+    assert excluded == [f"{UCLA_ANAT}/sub-29001_ses-1_acq-lores_run-1_T1w.nii.gz"]
+
+
+def test_select_t1w_single_image_and_empty():
+    """A lone T1w is used as-is; no images gives nothing to use or exclude."""
+    assert select_t1w_inputs(["sub-001/anat/sub-001_T1w.nii.gz"]) == (
+        ["sub-001/anat/sub-001_T1w.nii.gz"], []
+    )
+    assert select_t1w_inputs([]) == ([], [])
+
+
+def test_select_t1w_orders_runs_numerically():
+    """run-10 sorts after run-2, so the -i order is stable and readable."""
+    paths = ["sub-001_run-10_T1w.nii.gz", "sub-001_run-2_T1w.nii.gz"]
+    chosen, _ = select_t1w_inputs(paths)
+    assert chosen == ["sub-001_run-2_T1w.nii.gz", "sub-001_run-10_T1w.nii.gz"]
+
+
+def test_select_single_image_prefers_no_acq_then_lowest_run():
+    """T2w: recon-all takes one; pick no-acq first, then lowest run, then name."""
+    paths = [
+        "sub-001_acq-fast_run-1_T2w.nii.gz",
+        "sub-001_run-2_T2w.nii.gz",
+        "sub-001_run-1_T2w.nii.gz",
+    ]
+    chosen, excluded = select_single_image(paths)
+    assert chosen == "sub-001_run-1_T2w.nii.gz"
+    assert excluded == ["sub-001_acq-fast_run-1_T2w.nii.gz", "sub-001_run-2_T2w.nii.gz"]
+    assert select_single_image([]) == (None, [])
+
+
+@pytest.fixture
+def ucla_layout(bids_dataset):
+    """Mock layout for a session holding run-1 T1w, an acq-hires T1w and two T2w."""
+    anat = bids_dataset / "sub-001" / "ses-1" / "anat"
+    files = {
+        "T1w": [
+            str(anat / "sub-001_ses-1_acq-hires_run-1_T1w.nii.gz"),
+            str(anat / "sub-001_ses-1_run-1_T1w.nii.gz"),
+        ],
+        "T2w": [
+            str(anat / "sub-001_ses-1_run-2_T2w.nii.gz"),
+            str(anat / "sub-001_ses-1_run-1_T2w.nii.gz"),
+        ],
+    }
+    layout = MagicMock()
+    layout.get.side_effect = lambda **kwargs: list(files.get(kwargs.get("suffix"), []))
+    return layout, anat
+
+
+def test_process_subject_excludes_acq_variants_and_records_inputs(
+    bids_dataset, output_dir, freesurfer_license, ucla_layout
+):
+    """recon-all gets only the chosen images; the summary records used and unused inputs."""
+    layout, anat = ucla_layout
+    with patch.dict(os.environ, {"FREESURFER_HOME": "/opt/freesurfer"}):
+        wrapper = FreeSurferWrapper(
+            str(bids_dataset),
+            str(output_dir),
+            freesurfer_license=str(freesurfer_license)
+        )
+
+        def fake_recon_all(cmd, *args, **kwargs):
+            staged = wrapper.freesurfer_dir / "sub-001_ses-1"
+            (staged / "scripts").mkdir(parents=True, exist_ok=True)
+            (staged / "scripts" / "recon-all.done").write_text("")
+            return MagicMock(returncode=0)
+
+        with patch('subprocess.run', side_effect=fake_recon_all) as mock_run:
+            assert wrapper.process_subject("sub-001", layout, session_label="1")
+            cmd = mock_run.call_args[0][0]
+
+        inputs = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-i"]
+        assert inputs == [str(anat / "sub-001_ses-1_run-1_T1w.nii.gz")]
+        assert cmd[cmd.index("-T2") + 1] == str(anat / "sub-001_ses-1_run-1_T2w.nii.gz")
+
+        summary = wrapper.get_processing_summary()
+        assert summary["input_files"] == [
+            "sub-001/ses-1/anat/sub-001_ses-1_run-1_T1w.nii.gz",
+            "sub-001/ses-1/anat/sub-001_ses-1_run-1_T2w.nii.gz",
+        ]
+        assert summary["inputs_not_used"] == [
+            "sub-001/ses-1/anat/sub-001_ses-1_acq-hires_run-1_T1w.nii.gz",
+            "sub-001/ses-1/anat/sub-001_ses-1_run-2_T2w.nii.gz",
+        ]
+
+
+def test_record_subject_images_applies_same_selection(
+    bids_dataset, output_dir, freesurfer_license, ucla_layout
+):
+    """--skip-freesurfer records the same images a full run would have used."""
+    layout, anat = ucla_layout
+    with patch.dict(os.environ, {"FREESURFER_HOME": "/opt/freesurfer"}):
+        wrapper = FreeSurferWrapper(
+            str(bids_dataset),
+            str(output_dir),
+            freesurfer_license=str(freesurfer_license)
+        )
+        info = wrapper.record_subject_images("sub-001", layout, session_label="ses-1")
+
+    assert info["T1w_images"] == [str(anat / "sub-001_ses-1_run-1_T1w.nii.gz")]
+    assert info["T2w_images"] == [str(anat / "sub-001_ses-1_run-1_T2w.nii.gz")]

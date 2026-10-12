@@ -124,6 +124,15 @@ apptainer run \
   - `--nidm-input-dir`: Directory containing an existing NIDM document to augment.
   - `--verbose`: Enable debug logging.
 
+### Input images
+
+The app looks for T1w and T2w images in the subject's `anat/` directory (restricted to the requested session, if any) and chooses which ones go to `recon-all`:
+
+- **T1w.** Every T1w without an `acq-` entity is used; `recon-all` averages them, so repeated runs of the same acquisition are combined. If such images exist, every `acq-` variant is left out (for example, ABIDE II UCLA_Long sessions hold both `sub-X_ses-N_run-1_T1w` and `sub-X_ses-N_acq-hires_run-1_T1w`; only the first is used). If only `acq-` variants exist, all runs of the alphabetically first `acq` label are used. Acquisitions are never mixed.
+- **T2w.** `recon-all` takes one T2w (`-T2 ... -T2pial`). The app picks an image without `acq-` first, then the lowest run, then the first file name.
+
+The chosen and excluded files are logged, and `processing_summary.json` records them as `input_files` and `inputs_not_used` (paths relative to the BIDS root).
+
 ### Examples
 
 Process a single subject:
