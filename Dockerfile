@@ -40,3 +40,10 @@ RUN python3 -m pip install --upgrade pip setuptools wheel && \
 # =======================================
 # Entrypoint that expects input/output paths as arguments
 ENTRYPOINT ["python3", "/opt/src/run.py"]
+
+# The commit this image was built from (docker build --build-arg
+# GIT_COMMIT=$(git rev-parse HEAD) ...). Declared last so that a new commit
+# does not invalidate the cached layers above.
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$GIT_COMMIT \
+      org.opencontainers.image.source=https://github.com/ReproNim/freesurfer-nidm_bidsapp
