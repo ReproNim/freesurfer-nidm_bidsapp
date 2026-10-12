@@ -45,10 +45,10 @@ This BIDS App supports both Docker and Singularity/Apptainer, allowing you to ru
 python setup.py docker
 
 # Build Singularity/Apptainer image (e.g., on a cluster)
-apptainer build --fakeroot freesurfer-nidm-bidsapp.sif Singularity
+apptainer build --fakeroot --build-arg GIT_COMMIT=$(git rev-parse HEAD) freesurfer-nidm-bidsapp.sif Singularity
 
 # Or specify a custom output location
-apptainer build --fakeroot /path/to/output/freesurfer-nidm-bidsapp.sif Singularity
+apptainer build --fakeroot --build-arg GIT_COMMIT=$(git rev-parse HEAD) /path/to/output/freesurfer-nidm-bidsapp.sif Singularity
 ```
 
 > **Note:** The `--fakeroot` option is recommended for cluster environments because it avoids permission issues on shared systems and does not require root privileges. If you encounter issues, contact your system administrator to ensure your user is configured for fakeroot, and make sure you have write permissions in the build directory.

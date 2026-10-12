@@ -1,6 +1,17 @@
 Bootstrap: docker
 From: vnmd/freesurfer_8.0.0
 
+# The commit this image was built from, read back with
+# `apptainer inspect --labels <image>`. Pass it at build time:
+#   apptainer build --build-arg GIT_COMMIT=$(git rev-parse HEAD) ...
+# Without --build-arg the label reads "unknown".
+%arguments
+    GIT_COMMIT=unknown
+
+%labels
+    org.opencontainers.image.revision {{ GIT_COMMIT }}
+    org.opencontainers.image.source https://github.com/ReproNim/freesurfer-nidm_bidsapp
+
 %files
     ./src /opt/src
     ./requirements.txt /opt/requirements.txt
