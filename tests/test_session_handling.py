@@ -303,6 +303,9 @@ class TestBABSIntegration:
 
         runner = CliRunner()
         with patch("src.run.FreeSurferWrapper") as mock_wrapper:
+            # record_subject_images returns the recorded inputs; no failure_reason
+            # means the existing reconstruction is usable.
+            mock_wrapper.return_value.record_subject_images.return_value = {"T1w_images": []}
             result = runner.invoke(
                 cli,
                 [
@@ -321,6 +324,7 @@ class TestBABSIntegration:
 
         assert result.exit_code == 0, result.output
         mock_wrapper.return_value.process_subject.assert_not_called()
+        assert mock_wrapper.return_value.record_subject_images.call_args.kwargs["session_label"] == "baseline"
 
     def test_explicit_session_must_exist(self, tmp_path, bids_multi_session):
         """Reject an explicit session instead of silently processing all sessions."""
