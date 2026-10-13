@@ -7,13 +7,14 @@ from setuptools import find_packages, setup
 
 
 def get_version_from_file():
-    """Get version from VERSION file."""
+    """Get version from VERSION file.
+
+    Same key as src.utils.get_app_version(). No fallback: a missing VERSION or
+    key must fail the install, not produce a package that claims another version.
+    """
     version_path = Path(__file__).parent / "VERSION"
-    if version_path.exists():
-        with open(version_path) as f:
-            data = json.load(f)
-            return data.get("freesurfer-nidm_bidsapp", {}).get("version", "0.1.0")
-    return "0.1.0"
+    with open(version_path) as f:
+        return json.load(f)["freesurfer-nidm"]["version"]
 
 
 __version__ = get_version_from_file()
