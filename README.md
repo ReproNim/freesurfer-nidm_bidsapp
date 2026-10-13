@@ -45,10 +45,10 @@ This BIDS App supports both Docker and Singularity/Apptainer, allowing you to ru
 python setup.py docker
 
 # Build Singularity/Apptainer image (e.g., on a cluster)
-apptainer build --fakeroot freesurfer-nidm-bidsapp.sif Singularity
+apptainer build --fakeroot --build-arg GIT_COMMIT=$(git rev-parse HEAD) freesurfer-nidm-bidsapp.sif Singularity
 
 # Or specify a custom output location
-apptainer build --fakeroot /path/to/output/freesurfer-nidm-bidsapp.sif Singularity
+apptainer build --fakeroot --build-arg GIT_COMMIT=$(git rev-parse HEAD) /path/to/output/freesurfer-nidm-bidsapp.sif Singularity
 ```
 
 > **Note:** The `--fakeroot` option is recommended for cluster environments because it avoids permission issues on shared systems and does not require root privileges. If you encounter issues, contact your system administrator to ensure your user is configured for fakeroot, and make sure you have write permissions in the build directory.
@@ -121,7 +121,7 @@ apptainer run \
   - `--skip-bids-validation`: Skip PyBIDS validation.
   - `--skip-freesurfer`: Reuse a completed `recon-all` directory and run only the remaining export steps. The directory is checked against the images it was made from; see [Reusing an existing reconstruction](#reusing-an-existing-reconstruction).
   - `--skip-nidm`: Skip NIDM output generation.
-  - `--nidm-input-dir`: Directory containing an existing NIDM document to augment.
+  - `--nidm-input-dir`: Directory containing existing NIDM documents to augment. Defaults to `<bids_dir>/../NIDM` (the standard BABS mount point). Per subject the app searches most-specific first: `sub-<id>/ses-<session>/nidm.ttl` and `sub-<id>_ses-<session>/nidm.ttl` (session-wise runs), then `sub-<id>/nidm.ttl`, then a root-level `nidm.ttl`, then any top-level `.ttl`/`.jsonld` file. Missing input NIDM is not an error — the app then builds `nidm.ttl` from scratch.
   - `--max-voxel-size`: Largest voxel dimension in mm accepted for a T1w/T2w input (default `2.0`). See [Input images](#input-images).
   - `--verbose`: Enable debug logging.
 
@@ -199,69 +199,53 @@ BABS invokes the standard positional analysis level `participant` for both subje
 
 ### Output Directory Structure
 
-The container writes all results under a single `freesurfer-nidm_bidsapp/` subdirectory inside the specified `output_dir`. There are three sub-trees: BIDS-organised derivatives, the raw FreeSurfer `SUBJECTS_DIR`, and the NIDM Turtle files.
+The app writes everything for a subject under that subject's own directory, directly inside `output_dir` — there is no app-name wrapper directory. The subject directory is therefore also the top level of the per-subject zip in BABS workflows, so results land in the same layout whether the app runs standalone or through BABS.
 
 ```
 <output_dir>/
-└── freesurfer-nidm_bidsapp/
-    ├── dataset_description.json          # BIDS derivative dataset description
-    ├── README                            # Auto-generated derivatives readme
-    │
-    ├── sub-<id>/                         # BIDS-organised derivatives (single-session)
-    │   ├── anat/
-    │   │   ├── sub-<id>_desc-brain_T1w.nii.gz
-    │   │   ├── sub-<id>_desc-aparcaseg_dseg.nii.gz
-    │   │   └── sub-<id>_desc-wmparc_dseg.nii.gz
-    │   └── stats/
-    │       ├── sub-<id>_aseg.stats
-    │       ├── sub-<id>_lh.aparc.stats
-    │       └── sub-<id>_rh.aparc.stats
-    │
-    ├── sub-<id>/                         # BIDS-organised derivatives (multi-session)
-    │   └── ses-<session>/
-    │       ├── anat/
-    │       │   ├── sub-<id>_ses-<session>_desc-brain_T1w.nii.gz
-    │       │   ├── sub-<id>_ses-<session>_desc-aparcaseg_dseg.nii.gz
-    │       │   └── sub-<id>_ses-<session>_desc-wmparc_dseg.nii.gz
-    │       └── stats/
-    │           ├── sub-<id>_ses-<session>_aseg.stats
-    │           ├── sub-<id>_ses-<session>_lh.aparc.stats
-    │           └── sub-<id>_ses-<session>_rh.aparc.stats
-    │
-    ├── freesurfer/                       # Raw FreeSurfer SUBJECTS_DIR
-    │   ├── processing_summary.json       # Per-run processing summary with version info
-    │   └── sub-<id>[_ses-<session>]/     # Standard recon-all output directory
-    │       ├── mri/
-    │       │   ├── brain.mgz
-    │       │   ├── aparc.DKTatlas+aseg.mgz
-    │       │   └── wmparc.mgz
-    │       ├── surf/
-    │       │   ├── lh.pial
-    │       │   ├── lh.white
-    │       │   ├── rh.pial
-    │       │   └── rh.white
-    │       ├── label/
-    │       ├── stats/
-    │       │   ├── aseg.stats
-    │       │   ├── lh.aparc.stats
-    │       │   └── rh.aparc.stats
-    │       └── scripts/
-    │           └── recon-all.done        # Completion marker
-    │
-    └── nidm/                             # NIDM Turtle outputs (flat structure)
-        ├── sub-<id>.ttl                  # Single-session dataset
-        └── sub-<id>_ses-<session>.ttl    # Multi-session dataset
+├── dataset_description.json              # BIDS derivative dataset description (dataset level)
+├── README                                # Auto-generated derivatives readme (dataset level)
+│
+├── sub-<id>/                             # single-session dataset
+│   ├── anat/
+│   │   ├── sub-<id>_desc-brain_T1w.nii.gz
+│   │   ├── sub-<id>_desc-aparcaseg_dseg.nii.gz
+│   │   └── sub-<id>_desc-wmparc_dseg.nii.gz
+│   ├── stats/
+│   │   ├── sub-<id>_aseg.stats
+│   │   ├── sub-<id>_lh.aparc.stats
+│   │   └── sub-<id>_rh.aparc.stats
+│   ├── freesurfer/                       # recon-all output directory for this subject
+│   │   ├── mri/    (brain.mgz, aparc.DKTatlas+aseg.mgz, wmparc.mgz, ...)
+│   │   ├── surf/   (lh.white, lh.pial, rh.white, rh.pial, ...)
+│   │   ├── label/
+│   │   ├── stats/  (aseg.stats, lh.aparc.stats, rh.aparc.stats, ...)
+│   │   └── scripts/ (recon-all.done, recon-all.log, ...)
+│   ├── nidm.ttl                          # NIDM graph: input NIDM (if any) + this run's measures
+│   ├── fs_cde.ttl                        # FreeSurfer CDE vocabulary (static, shipped alongside)
+│   └── processing_summary.json           # Per-run processing summary with version info (not written by --skip-freesurfer)
+│
+└── sub-<id>/                             # multi-session dataset: same tree, one level deeper
+    └── ses-<session>/
+        ├── anat/    (sub-<id>_ses-<session>_desc-*.nii.gz)
+        ├── stats/   (sub-<id>_ses-<session>_*.stats)
+        ├── freesurfer/
+        ├── nidm.ttl
+        ├── fs_cde.ttl
+        └── processing_summary.json
 ```
 
 **Notes:**
-- BIDS-organised derivative files use BIDS-compliant naming (e.g., `_desc-brain_T1w.nii.gz`, `_desc-aparcaseg_dseg.nii.gz`) and are placed directly under `freesurfer-nidm_bidsapp/sub-<id>/`.
-- The `freesurfer/sub-<id>[_ses-<session>]/` directory is the standard FreeSurfer subject directory created by `recon-all` and contains the full set of recon-all outputs.
-- For multi-session datasets the FreeSurfer subject ID is `sub-<id>_ses-<session>` (e.g. `sub-01_ses-baseline`).
-- NIDM outputs use a flat directory structure (all `.ttl` files directly in `nidm/`). In BABS workflows each job produces one `.ttl` file named after the subject (and session if applicable).
+- BIDS-organised derivative files use BIDS-compliant naming (e.g., `_desc-brain_T1w.nii.gz`, `_desc-aparcaseg_dseg.nii.gz`).
+- `freesurfer/` is the FreeSurfer subject directory created by `recon-all` (the app stages `SUBJECTS_DIR` internally and moves the result here). For multi-session datasets the FreeSurfer subject ID is `sub-<id>_ses-<session>` (e.g. `sub-01_ses-baseline`).
+- The NIDM output is always named `nidm.ttl`, one per subject (or per session for multi-session data). When an input NIDM document is found (see `--nidm-input-dir`), `nidm.ttl` contains that graph plus this run's measures — the input graph is preserved inside the output, never written to a separate file.
+- `fs_cde.ttl` holds the shared FreeSurfer common-data-element vocabulary. It is identical across subjects and deliberately kept out of `nidm.ttl`.
+- When no input NIDM document is found, the converter also leaves one intermediate `<stats-name>_nidm.jsonld` file per supported stats file (e.g. `aseg_nidm.jsonld`) in the subject directory; their content is merged into `nidm.ttl`.
+- In BABS workflows each job zips only `sub-<id>/`, so `dataset_description.json` and `README` belong to the enclosing derivative dataset rather than the zip.
 
 ### FreeSurfer Output
 
-The `freesurfer/` subdirectory is the FreeSurfer `SUBJECTS_DIR`. Key files copied into the BIDS-organised tree include:
+`sub-<id>[/ses-<session>]/freesurfer/` is the subject's `recon-all` output directory. Key files copied into the BIDS-organised `anat/` and `stats/` trees include:
 
 - Brain-extracted T1w (`brain.mgz` → `sub-<id>_desc-brain_T1w.nii.gz`)
 - Cortical parcellation (`aparc.DKTatlas+aseg.mgz` → `sub-<id>_desc-aparcaseg_dseg.nii.gz`)
@@ -271,7 +255,7 @@ The `freesurfer/` subdirectory is the FreeSurfer `SUBJECTS_DIR`. Key files copie
 
 ### NIDM Output
 
-The NIDM outputs are provided in Turtle (`.ttl`) format with files named according to BIDS conventions (e.g., `sub-01.ttl`, `sub-01_ses-baseline.ttl`). The output includes:
+The NIDM output is a Turtle (`.ttl`) document named `nidm.ttl`, written beside the analysis results in each subject (or subject/session) directory, with the static CDE vocabulary alongside as `fs_cde.ttl`. The graph includes:
 
 - Comprehensive version information:
   - FreeSurfer version and source (from base image)

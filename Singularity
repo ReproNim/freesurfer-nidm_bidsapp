@@ -1,6 +1,17 @@
 Bootstrap: docker
 From: vnmd/freesurfer_8.0.0
 
+# The commit this image was built from, read back with
+# `apptainer inspect --labels <image>`. Pass it at build time:
+#   apptainer build --build-arg GIT_COMMIT=$(git rev-parse HEAD) ...
+# Without --build-arg the label reads "unknown".
+%arguments
+    GIT_COMMIT=unknown
+
+%labels
+    org.opencontainers.image.revision {{ GIT_COMMIT }}
+    org.opencontainers.image.source https://github.com/ReproNim/freesurfer-nidm_bidsapp
+
 %files
     ./src /opt/src
     ./requirements.txt /opt/requirements.txt
@@ -9,8 +20,20 @@ From: vnmd/freesurfer_8.0.0
     ./VERSION /opt/VERSION
 
 %post
+    # Fail the build on the first failing command. %post is one scriptlet whose
+    # exit status is its last command's, so without this a failed converter or
+    # requirements install is hidden by whatever runs after it.
+    set -e
+
     # Create opt directory for application code
     mkdir -p /opt
+
+    # %files keeps each file's mode from the checkout it was copied from, and a
+    # SIF keeps the builder's uid, so a file that is mode 600 there would be
+    # unreadable for every other account running the image (this happened to
+    # the mriqc-nidm 0.1.0 image). a+rX: files readable, directories
+    # traversable, nothing made executable.
+    chmod -R a+rX /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION
     
     # Install system dependencies
     apt-get update && \
@@ -34,6 +57,15 @@ From: vnmd/freesurfer_8.0.0
     python3 -m pip install -r requirements.txt
     python3 -m pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8'
     python3 -m pip install -e .
+
+    # Last step: everything this recipe put under /opt must be usable by
+    # whoever runs the image, not only by the account that built it.
+    unreadable="$(find /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=rx \))"
+    if [ -n "$unreadable" ]; then
+        echo "ERROR: not readable by other users (the image only works for its builder):" >&2
+        echo "$unreadable" >&2
+        exit 1
+    fi
 
 %environment
     # Set runtime license path to match BABS mount point
