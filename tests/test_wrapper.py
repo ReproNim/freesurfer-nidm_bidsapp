@@ -523,3 +523,30 @@ def test_voxel_size_reads_header_zooms(tmp_path):
 
     from src.freesurfer.wrapper import voxel_size
     assert voxel_size(path) == (1.5, 1.5, 4.0)
+
+
+# --- Paths recorded relative to the BIDS root ---------------------------------------
+
+def test_bids_relative_keeps_the_bids_path_of_an_annexed_image(tmp_path, freesurfer_license, monkeypatch):
+    """In a git-annex dataset an image is a symlink into .git/annex/objects. The recorded
+    path must stay its BIDS path, also when the BIDS root is given with '..' (pybids then
+    reports paths with '..' in them)."""
+    ds = tmp_path / "ds"
+    anat = ds / "sub-001" / "anat"
+    anat.mkdir(parents=True)
+    annexed = ds / ".git" / "annex" / "objects" / "Xx" / "Yy" / "MD5E-s1--d41d8.nii.gz"
+    annexed.parent.mkdir(parents=True)
+    annexed.write_bytes(b"\0")
+    (anat / "sub-001_T1w.nii.gz").symlink_to(annexed)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    with patch.dict(os.environ, {"FREESURFER_HOME": "/opt/freesurfer"}):
+        wrapper = FreeSurferWrapper("../ds", str(tmp_path / "out"),
+                                    freesurfer_license=str(freesurfer_license))
+
+    expected = "sub-001/anat/sub-001_T1w.nii.gz"
+    assert wrapper._bids_relative(f"{work}/../ds/sub-001/anat/sub-001_T1w.nii.gz") == expected
+    assert wrapper._bids_relative(str(anat / "sub-001_T1w.nii.gz")) == expected
+    assert wrapper._bids_relative(str(tmp_path / "elsewhere" / "x_T1w.nii.gz")) == str(
+        tmp_path / "elsewhere" / "x_T1w.nii.gz")

@@ -463,13 +463,19 @@ class FreeSurferWrapper:
     def _bids_relative(self, path):
         """Path relative to the BIDS root, or the path unchanged if outside it."""
         path = Path(path)
-        for root in (self.bids_dir, self.bids_dir.resolve()):
-            for candidate in (path, path.resolve()):
-                try:
-                    return str(candidate.relative_to(root))
-                except ValueError:
-                    continue
-        return str(path)
+        try:
+            relative = path.relative_to(self.bids_dir)
+            if ".." not in relative.parts:
+                return relative.as_posix()
+        except ValueError:
+            pass
+        # Resolve the directory, not the file: an image in a git-annex dataset is a
+        # symlink into .git/annex/objects, and following it loses the BIDS path.
+        real = Path(os.path.realpath(path.parent)) / path.name
+        try:
+            return real.relative_to(os.path.realpath(self.bids_dir)).as_posix()
+        except ValueError:
+            return str(path)
 
     def _copy_file(self, src, dest):
         """Copy file if it exists."""
