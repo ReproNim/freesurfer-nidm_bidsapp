@@ -22,8 +22,11 @@ ENV PATH=/usr/local/bin:$PATH
 # =======================================
 # BIDS App Setup
 # =======================================
-# Copy application files to a location that won't conflict
+# Copy application files to a location that won't conflict. COPY keeps the
+# build context's file modes, so a file that is mode 600 in the checkout would
+# be unreadable for a non-root --user; make the app's files readable by everyone.
 COPY . /opt/
+RUN chmod -R a+rX /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION
 
 # Install Python dependencies and submodules
 WORKDIR /opt
@@ -34,6 +37,15 @@ RUN python3 -m pip install --upgrade pip setuptools wheel && \
     python3 -m pip install -r requirements.txt && \
     python3 -m pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8' && \
     python3 -m pip install -e .
+
+# Everything the app reads must be usable by a non-root --user, the same check
+# Singularity runs at the end of %post.
+RUN unreadable="$(find /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=rx \))" && \
+    if [ -n "$unreadable" ]; then \
+        echo "ERROR: not readable by other users:" >&2; \
+        echo "$unreadable" >&2; \
+        exit 1; \
+    fi
 
 # =======================================
 # Runtime Configuration
