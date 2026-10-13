@@ -457,14 +457,16 @@ def process_participant(
             logger.info(f"Skipping FreeSurfer processing for {fs_output_subject_id} (--skip-freesurfer)")
             logger.info(f"Using existing outputs at {subject_dir}")
             logger.info("================================")
-            freesurfer_wrapper.record_subject_images(fs_subject_id, layout, session_label=detected_session)
-            success = True
+            info = freesurfer_wrapper.record_subject_images(fs_subject_id, layout, session_label=detected_session)
+            # The reconstruction's own inputs must pass --max-voxel-size, as a new
+            # run's would; the reason is logged by the wrapper.
+            success = not info.get("failure_reason")
         else:
             success = freesurfer_wrapper.process_subject(fs_subject_id, layout, session_label=detected_session)
             # Save processing summary
             summary = freesurfer_wrapper.get_processing_summary()
             summary["version_info"] = version_info
-            freesurfer_wrapper.save_processing_summary(summary)
+            summary_path = freesurfer_wrapper.save_processing_summary(summary)
 
             logger.info("================================")
             logger.info("Processing complete!")
@@ -475,9 +477,12 @@ def process_participant(
         sys.exit(1)
 
     if not success:
-        # The reason is in the log and in processing_summary.json. Exit non-zero
-        # so a scheduler (e.g. BABS) does not count the job as done.
-        logger.error("FreeSurfer processing failed; see processing_summary.json")
+        # Exit non-zero so a scheduler (e.g. BABS) does not count the job as done.
+        # --skip-freesurfer writes no processing summary; the reason is in the log.
+        if skip_freesurfer:
+            logger.error("Cannot use the existing FreeSurfer outputs; see the error above")
+        else:
+            logger.error(f"FreeSurfer processing failed; see {summary_path}")
         sys.exit(1)
 
     if success and not skip_nidm:
@@ -577,15 +582,17 @@ def process_session(
             logger.info(f"Skipping FreeSurfer processing for {fs_output_subject_id} (--skip-freesurfer)")
             logger.info(f"Using existing outputs at {subject_dir}")
             logger.info("================================")
-            freesurfer_wrapper.record_subject_images(fs_subject_id, layout, session_label=session_label)
-            success = True
+            info = freesurfer_wrapper.record_subject_images(fs_subject_id, layout, session_label=session_label)
+            # The reconstruction's own inputs must pass --max-voxel-size, as a new
+            # run's would; the reason is logged by the wrapper.
+            success = not info.get("failure_reason")
         else:
             # Use the enhanced process_subject method with session_label
             success = freesurfer_wrapper.process_subject(fs_subject_id, layout, session_label=session_label)
             # Save processing summary
             summary = freesurfer_wrapper.get_processing_summary()
             summary["version_info"] = version_info
-            freesurfer_wrapper.save_processing_summary(summary)
+            summary_path = freesurfer_wrapper.save_processing_summary(summary)
             logger.info("================================")
             logger.info("Processing complete!")
             logger.info("================================")
@@ -595,9 +602,12 @@ def process_session(
         sys.exit(1)
 
     if not success:
-        # The reason is in the log and in processing_summary.json. Exit non-zero
-        # so a scheduler (e.g. BABS) does not count the job as done.
-        logger.error("FreeSurfer processing failed; see processing_summary.json")
+        # Exit non-zero so a scheduler (e.g. BABS) does not count the job as done.
+        # --skip-freesurfer writes no processing summary; the reason is in the log.
+        if skip_freesurfer:
+            logger.error("Cannot use the existing FreeSurfer outputs; see the error above")
+        else:
+            logger.error(f"FreeSurfer processing failed; see {summary_path}")
         sys.exit(1)
 
     if success and not skip_nidm:
