@@ -368,5 +368,21 @@ class TestMaxVoxelSize:
         assert mock_wrapper.call_args.kwargs["max_voxel_size"] == 3.5
 
     def test_failed_subject_exits_non_zero(self, tmp_path, bids_single_session):
-        result, _ = self._invoke(bids_single_session, tmp_path / "out", success=False)
+        result, mock_wrapper = self._invoke(bids_single_session, tmp_path / "out", success=False)
+        assert result.exit_code != 0
+        mock_wrapper.return_value.process_subject.assert_called_once()
+
+    def test_failed_session_exits_non_zero(self, tmp_path, bids_multi_session):
+        """The session-level entry point (process_session) also exits non-zero."""
+        runner = CliRunner()
+        with patch('src.run.FreeSurferWrapper') as mock_wrapper, \
+             patch('src.run.subprocess.run'):
+            mock_wrapper.return_value.process_subject.return_value = False
+            mock_wrapper.return_value.get_processing_summary.return_value = {}
+            result = runner.invoke(cli, [
+                str(bids_multi_session), str(tmp_path / "out"), 'session',
+                '--participant-label', '001', '--session-label', 'baseline',
+                '--skip-bids-validation', '--skip-nidm',
+            ])
+        mock_wrapper.return_value.process_subject.assert_called_once()
         assert result.exit_code != 0
