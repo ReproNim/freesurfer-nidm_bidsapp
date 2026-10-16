@@ -190,21 +190,78 @@ class TestNIDMFileDiscovery:
         assert len(ttl_files) >= 1
         assert nidm_dir / "nidm.ttl" in ttl_files
 
-    def test_fallback_ttl_discovery(self, tmp_path):
-        """Verify fallback to *.ttl when nidm.ttl not found."""
+
+class TestFindNIDMInputFile:
+    """find_nidm_input_file only ever returns this subject's own record."""
+
+    @staticmethod
+    def _touch(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("@prefix : <http://example.org/> .")
+        return path
+
+    def test_flat_directory_gives_each_subject_its_own_file(self, tmp_path):
+        from src.run import find_nidm_input_file
+
         nidm_dir = tmp_path / "NIDM"
-        nidm_dir.mkdir()
+        own = {s: self._touch(nidm_dir / f"sub-{s}.ttl") for s in ("001", "002")}
 
-        # Create only other .ttl files
-        (nidm_dir / "sub-001.ttl").write_text("@prefix : <http://example.org/> .")
-        (nidm_dir / "sub-002.ttl").write_text("@prefix : <http://example.org/> .")
+        for s in ("001", "002"):
+            assert find_nidm_input_file(nidm_dir, s) == own[s]
 
-        # Verify nidm.ttl doesn't exist
-        assert not (nidm_dir / "nidm.ttl").exists()
+    def test_flat_session_file(self, tmp_path):
+        from src.run import find_nidm_input_file
 
-        # But other TTL files should be discoverable
-        ttl_files = list(nidm_dir.glob("*.ttl"))
-        assert len(ttl_files) == 2
+        nidm_dir = tmp_path / "NIDM"
+        self._touch(nidm_dir / "sub-001_ses-01.ttl")
+        own = self._touch(nidm_dir / "sub-001_ses-02.ttl")
+
+        assert find_nidm_input_file(nidm_dir, "001", "02") == own
+
+    def test_other_subjects_file_is_never_used(self, tmp_path):
+        """No match for this subject means no input, not the first file listed."""
+        from src.run import find_nidm_input_file
+
+        nidm_dir = tmp_path / "NIDM"
+        self._touch(nidm_dir / "sub-002.ttl")
+        self._touch(nidm_dir / "stray.ttl")
+        self._touch(nidm_dir / "sub-002.jsonld")
+
+        assert find_nidm_input_file(nidm_dir, "001") is None
+
+    def test_per_subject_nidm_ttl_comes_first(self, tmp_path):
+        """The nidm_4.5.0 layout wins over a flat file and the dataset-level one."""
+        from src.run import find_nidm_input_file
+
+        nidm_dir = tmp_path / "NIDM"
+        own = self._touch(nidm_dir / "sub-001" / "nidm.ttl")
+        self._touch(nidm_dir / "sub-001.ttl")
+        self._touch(nidm_dir / "nidm.ttl")
+
+        assert find_nidm_input_file(nidm_dir, "001") == own
+
+    def test_session_layout_comes_before_subject_layout(self, tmp_path):
+        from src.run import find_nidm_input_file
+
+        nidm_dir = tmp_path / "NIDM"
+        own = self._touch(nidm_dir / "sub-001" / "ses-02" / "nidm.ttl")
+        self._touch(nidm_dir / "sub-001" / "nidm.ttl")
+
+        assert find_nidm_input_file(nidm_dir, "001", "02") == own
+
+    def test_dataset_level_nidm_ttl_is_the_last_resort(self, tmp_path):
+        from src.run import find_nidm_input_file
+
+        nidm_dir = tmp_path / "NIDM"
+        dataset = self._touch(nidm_dir / "nidm.ttl")
+
+        assert find_nidm_input_file(nidm_dir, "001") == dataset
+
+    def test_missing_directory(self, tmp_path):
+        from src.run import find_nidm_input_file
+
+        assert find_nidm_input_file(None, "001") is None
+        assert find_nidm_input_file(tmp_path / "absent", "001") is None
 
 
 class TestNIDMOutputNaming:

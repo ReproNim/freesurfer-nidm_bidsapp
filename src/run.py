@@ -129,6 +129,44 @@ def subject_output_dir(output_dir, participant_label, session=None):
     return subject_dir
 
 
+def find_nidm_input_file(nidm_input_dir, participant_label, session=None):
+    """This subject's existing NIDM document, or None.
+
+    Candidates are tried most specific first, and are the same as ants-nidm's
+    find_nidm_input_file. The per-subject nidm.ttl layout comes first because
+    that is what the shared NIDM datasets use (e.g. nidm_4.5.0/sub-<id>/nidm.ttl);
+    the sub-<id>.ttl and flat forms are kept for older or hand-built inputs.
+
+    There is no "any top-level file" fallback: in a flat directory of
+    per-subject files it handed every subject whichever file was listed first,
+    usually another subject's record. A root-level nidm.ttl is accepted as a
+    dataset-level document covering all subjects.
+    """
+    if nidm_input_dir is None:
+        return None
+    nidm_input_dir = Path(nidm_input_dir)
+    if not nidm_input_dir.exists():
+        return None
+
+    subject_dirname = f"sub-{participant_label}"
+    candidates = []
+    if session:
+        candidates += [
+            nidm_input_dir / subject_dirname / f"ses-{session}" / "nidm.ttl",
+            nidm_input_dir / f"{subject_dirname}_ses-{session}" / "nidm.ttl",
+            nidm_input_dir / subject_dirname / f"ses-{session}" / f"{subject_dirname}_ses-{session}.ttl",
+            nidm_input_dir / f"{subject_dirname}_ses-{session}.ttl",
+        ]
+    candidates += [
+        nidm_input_dir / subject_dirname / "nidm.ttl",
+        nidm_input_dir / subject_dirname / f"{subject_dirname}.ttl",
+        nidm_input_dir / f"{subject_dirname}.ttl",
+        # Dataset-level document covering all subjects.
+        nidm_input_dir / "nidm.ttl",
+    ]
+    return next((c for c in candidates if c.exists()), None)
+
+
 def nidm_conversion(
     output_dir,
     participant_label,
@@ -173,28 +211,7 @@ def nidm_conversion(
 
     os.makedirs(nidm_dir, exist_ok=True)
 
-    existing_nidm_file = None
-    if nidm_input_dir and nidm_input_dir.exists():
-        # Look for an existing NIDM file to append to, most specific first.
-        # Supports both the legacy single-file layout (top-level nidm.ttl) and
-        # the per-subject layout used by newer NIDM datasets (e.g. nidm_4.5.0:
-        # sub-<id>/nidm.ttl, optionally nested under a ses-<id> subdir).
-        subject_dirname = f"sub-{participant_label}"
-        candidates = []
-        if bids_session:
-            candidates.append(nidm_input_dir / subject_dirname / f"ses-{bids_session}" / "nidm.ttl")
-            candidates.append(nidm_input_dir / f"{subject_dirname}_ses-{bids_session}" / "nidm.ttl")
-        candidates.append(nidm_input_dir / subject_dirname / "nidm.ttl")
-        candidates.append(nidm_input_dir / "nidm.ttl")
-        existing_nidm_file = next((c for c in candidates if c.exists()), None)
-        if existing_nidm_file is None:
-            # Legacy fallback: any top-level serialized NIDM file.
-            for pattern in ("*.ttl", "*.jsonld", "*.json-ld"):
-                try:
-                    existing_nidm_file = next(nidm_input_dir.glob(pattern))
-                    break
-                except StopIteration:
-                    continue
+    existing_nidm_file = find_nidm_input_file(nidm_input_dir, participant_label, bids_session)
 
     # Build the command
     module_name = "segstats_jsonld.fs_to_nidm"
