@@ -59,12 +59,16 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
     bids_dir = Path(bids_dir)
 
     # Use CLI argument if provided, otherwise default to BABS location
+    explicit_nidm_input_dir = nidm_input_dir is not None
     if nidm_input_dir is None:
         nidm_input_dir = bids_dir.parent / "NIDM"
     else:
         nidm_input_dir = Path(nidm_input_dir)
 
     if not nidm_input_dir.exists():
+        if explicit_nidm_input_dir:
+            logger.warning(f"--nidm-input-dir {nidm_input_dir} does not exist; "
+                           "NIDM will be built without an input document")
         nidm_input_dir = None
 
     # Per-subject output layout (study-wide standard): everything an app produces
@@ -129,7 +133,17 @@ def subject_output_dir(output_dir, participant_label, session=None):
     return subject_dir
 
 
-def find_nidm_input_file(nidm_input_dir, participant_label, session=None):
+class NIDMInputNotRetrieved(FileNotFoundError):
+    """The subject's NIDM input is a symlink with no content behind it.
+
+    That is what a datalad/git-annex clone looks like before ``datalad get``.
+    It is not the same as the subject having no NIDM record: treating it as
+    a miss would build nidm.ttl without the inherited demographics and
+    provenance and still exit 0, for every subject in the dataset.
+    """
+
+
+def find_nidm_input_file(nidm_input_dir, participant_label, session=None, warn=False):
     """This subject's existing NIDM document, or None.
 
     Candidates are tried most specific first, and are the same as ants-nidm's
@@ -141,6 +155,11 @@ def find_nidm_input_file(nidm_input_dir, participant_label, session=None):
     per-subject files it handed every subject whichever file was listed first,
     usually another subject's record. A root-level nidm.ttl is accepted as a
     dataset-level document covering all subjects.
+
+    The first candidate present decides. A dangling symlink (annexed content
+    not fetched) raises NIDMInputNotRetrieved rather than falling through.
+    With warn=True, a miss in an existing input directory is logged as a
+    warning.
     """
     if nidm_input_dir is None:
         return None
@@ -164,7 +183,23 @@ def find_nidm_input_file(nidm_input_dir, participant_label, session=None):
         # Dataset-level document covering all subjects.
         nidm_input_dir / "nidm.ttl",
     ]
-    return next((c for c in candidates if c.exists()), None)
+    for c in candidates:
+        if c.exists():
+            return c
+        if c.is_symlink():
+            raise NIDMInputNotRetrieved(
+                f"NIDM input {c} is a symlink with no content behind it "
+                f"(run `datalad get` on the NIDM input dataset)"
+            )
+
+    if warn:
+        logger.warning(
+            f"No NIDM input for {subject_dirname}"
+            + (f" ses-{session}" if session else "")
+            + f" in {nidm_input_dir}; nidm.ttl will not include its"
+            " demographics or input provenance"
+        )
+    return None
 
 
 def nidm_conversion(
@@ -447,6 +482,11 @@ def process_participant(
 
     # Run participant analysis
     try:
+        # Look the NIDM input up before recon-all: an unfetched annex file is
+        # an error, and it should cost seconds, not hours of reconstruction.
+        if not skip_nidm:
+            find_nidm_input_file(nidm_input_dir, participant_label, detected_session, warn=True)
+
         if skip_freesurfer:
             # Validate that FreeSurfer outputs exist
             fs_output_subject_id = (
@@ -574,6 +614,11 @@ def process_session(
 
     # Run session-level analysis
     try:
+        # Look the NIDM input up before recon-all: an unfetched annex file is
+        # an error, and it should cost seconds, not hours of reconstruction.
+        if not skip_nidm:
+            find_nidm_input_file(nidm_input_dir, participant_label, session_label, warn=True)
+
         if skip_freesurfer:
             # Validate that session-specific FreeSurfer outputs exist.
             fs_output_subject_id = f"{fs_subject_id}_ses-{session_label}"

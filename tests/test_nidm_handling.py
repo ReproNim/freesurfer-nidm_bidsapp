@@ -263,6 +263,51 @@ class TestFindNIDMInputFile:
         assert find_nidm_input_file(None, "001") is None
         assert find_nidm_input_file(tmp_path / "absent", "001") is None
 
+    def test_unfetched_annex_input_is_an_error_not_a_miss(self, tmp_path):
+        """A dangling symlink is what datalad leaves before `datalad get`.
+        Falling through to the dataset-level file, or to no input, would
+        build nidm.ttl without the subject's demographics and exit 0."""
+        from src.run import NIDMInputNotRetrieved, find_nidm_input_file
+
+        nidm_dir = tmp_path / "NIDM"
+        (nidm_dir / "sub-001").mkdir(parents=True)
+        (nidm_dir / "sub-001" / "nidm.ttl").symlink_to("../.git/annex/objects/missing")
+        self._touch(nidm_dir / "nidm.ttl")
+
+        with pytest.raises(NIDMInputNotRetrieved):
+            find_nidm_input_file(nidm_dir, "001")
+
+    def test_fetched_file_wins_over_a_dangling_lower_priority_one(self, tmp_path):
+        from src.run import find_nidm_input_file
+
+        nidm_dir = tmp_path / "NIDM"
+        own = self._touch(nidm_dir / "sub-001" / "nidm.ttl")
+        (nidm_dir / "sub-001.ttl").symlink_to("missing")
+
+        assert find_nidm_input_file(nidm_dir, "001") == own
+
+    def test_miss_is_a_warning_only_when_asked(self, tmp_path, caplog):
+        import logging
+        from src.run import find_nidm_input_file
+
+        nidm_dir = tmp_path / "NIDM"
+        nidm_dir.mkdir()
+
+        with caplog.at_level(logging.WARNING, logger="freesurfer-nidm"):
+            assert find_nidm_input_file(nidm_dir, "001", "02") is None
+            assert not caplog.records
+            assert find_nidm_input_file(nidm_dir, "001", "02", warn=True) is None
+        assert "sub-001 ses-02" in caplog.records[-1].getMessage()
+
+    def test_sub_01_does_not_match_sub_010(self, tmp_path):
+        from src.run import find_nidm_input_file
+
+        nidm_dir = tmp_path / "NIDM"
+        self._touch(nidm_dir / "sub-010" / "nidm.ttl")
+        self._touch(nidm_dir / "sub-010.ttl")
+
+        assert find_nidm_input_file(nidm_dir, "01") is None
+
 
 class TestNIDMOutputNaming:
     """Test NIDM output file naming conventions."""
