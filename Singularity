@@ -5,6 +5,11 @@ From: vnmd/freesurfer_8.0.0
 # `apptainer inspect --labels <image>`. Pass it at build time:
 #   apptainer build --build-arg GIT_COMMIT=$(git rev-parse HEAD) ...
 # Without --build-arg the label reads "unknown".
+# org.opencontainers.image.version is this app's version. It is written in
+# %post, not %labels: without --force, %labels does not replace a label the
+# base image already sets, so the base's own (e.g. Ubuntu's 22.04) would
+# show through.
+# tests/test_version.py checks it against the app version.
 %arguments
     GIT_COMMIT=unknown
 
@@ -24,6 +29,12 @@ From: vnmd/freesurfer_8.0.0
     # exit status is its last command's, so without this a failed converter or
     # requirements install is hidden by whatever runs after it.
     set -e
+
+    # Unless the build uses --force, Apptainer keeps an inherited label over the
+    # same key in %labels (it warns "already exists ... not overwriting"); a
+    # label written here replaces it either way. SingularityCE sets only
+    # SINGULARITY_LABELS, hence the fallback.
+    echo "org.opencontainers.image.version 0.1.2" >> "${APPTAINER_LABELS:-$SINGULARITY_LABELS}"
 
     # Create opt directory for application code
     mkdir -p /opt

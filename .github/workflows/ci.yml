@@ -87,6 +87,9 @@ jobs:
         rev=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' bids/freesurfer:test)
         echo "org.opencontainers.image.revision=$rev"
         test "$rev" = "${{ github.event.pull_request.head.sha || github.sha }}"
+        ver=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.version" }}' bids/freesurfer:test)
+        echo "org.opencontainers.image.version=$ver"
+        test "$ver" = "$(python3 -c 'import json; print(json.load(open("VERSION"))["freesurfer-nidm"]["version"])')"
 
   singularity:
     runs-on: ubuntu-latest
