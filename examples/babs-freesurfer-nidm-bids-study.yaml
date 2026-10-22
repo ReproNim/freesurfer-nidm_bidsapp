@@ -1,9 +1,9 @@
-# Example BABS configuration for freesurfer-nidm 0.1.1 using the BIDS-study
+# Example BABS configuration for freesurfer-nidm 0.1.2 using the BIDS-study
 # layout added by PennLINC/babs PR #369.
 #
 # Initialize the BABS project inside the study derivatives directory, for
 # example:
-#   /path/to/study/derivatives/freesurfer-nidm-0-1-1-babs
+#   /path/to/study/derivatives/freesurfer-nidm-0-1-2-babs
 
 analysis_path: "."
 input_ria_path: ".babs/input_ria"
@@ -35,7 +35,7 @@ singularity_args:
 # The app writes <output>/sub-<id>/... with no app-name wrapper, so each job
 # zips its own subject folder. ${subid} is defined by the job script at run time.
 zip_foldernames:
-    ${subid}: "0-1-1"
+    ${subid}: "0-1-2"
 
 cluster_resources:
     interpreting_shell: "/bin/bash"
