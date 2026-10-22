@@ -391,6 +391,62 @@ class TestMaxVoxelSize:
         assert result.exit_code != 0
 
 
+class TestNIDMInputPreflight:
+    """The NIDM input is checked before recon-all, in both entry points."""
+
+    @staticmethod
+    def _unfetched(nidm_dir, *parts):
+        target = nidm_dir.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to("../.git/annex/objects/missing")
+        return nidm_dir
+
+    def _invoke(self, bids_dir, output_dir, level, *extra):
+        runner = CliRunner()
+        with patch('src.run.FreeSurferWrapper') as mock_wrapper, \
+             patch('src.run.subprocess.run'):
+            mock_wrapper.return_value.process_subject.return_value = True
+            mock_wrapper.return_value.get_processing_summary.return_value = {}
+            result = runner.invoke(cli, [
+                str(bids_dir), str(output_dir), level,
+                '--participant-label', '001', '--skip-bids-validation', *extra,
+            ])
+        return result, mock_wrapper
+
+    def test_unfetched_input_fails_participant_before_recon_all(self, tmp_path, bids_single_session):
+        nidm = self._unfetched(tmp_path / "NIDM", "sub-001", "nidm.ttl")
+        result, mock_wrapper = self._invoke(
+            bids_single_session, tmp_path / "out", 'participant', '--nidm-input-dir', str(nidm))
+        assert result.exit_code == 1, result.output
+        mock_wrapper.return_value.process_subject.assert_not_called()
+
+    def test_unfetched_input_fails_session_before_recon_all(self, tmp_path, bids_multi_session):
+        nidm = self._unfetched(tmp_path / "NIDM", "sub-001", "ses-baseline", "nidm.ttl")
+        result, mock_wrapper = self._invoke(
+            bids_multi_session, tmp_path / "out", 'session',
+            '--session-label', 'baseline', '--nidm-input-dir', str(nidm))
+        assert result.exit_code == 1, result.output
+        mock_wrapper.return_value.process_subject.assert_not_called()
+
+    def test_skip_nidm_skips_the_preflight(self, tmp_path, bids_single_session):
+        nidm = self._unfetched(tmp_path / "NIDM", "sub-001", "nidm.ttl")
+        result, mock_wrapper = self._invoke(
+            bids_single_session, tmp_path / "out", 'participant',
+            '--skip-nidm', '--nidm-input-dir', str(nidm))
+        assert result.exit_code == 0, result.output
+        mock_wrapper.return_value.process_subject.assert_called_once()
+
+    def test_missing_explicit_input_dir_is_a_warning(self, tmp_path, bids_single_session, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="freesurfer-nidm"):
+            result, _ = self._invoke(
+                bids_single_session, tmp_path / "out", 'participant',
+                '--skip-nidm', '--nidm-input-dir', str(tmp_path / "absent"))
+        assert result.exit_code == 0, result.output
+        assert any("does not exist" in r.getMessage() for r in caplog.records)
+
+
 class TestSkipFreesurferUsesRecordedInputs:
     """--skip-freesurfer judges the existing tree by the images recon-all recorded.
 

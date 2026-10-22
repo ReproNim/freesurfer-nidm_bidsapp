@@ -59,12 +59,16 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
     bids_dir = Path(bids_dir)
 
     # Use CLI argument if provided, otherwise default to BABS location
+    explicit_nidm_input_dir = nidm_input_dir is not None
     if nidm_input_dir is None:
         nidm_input_dir = bids_dir.parent / "NIDM"
     else:
         nidm_input_dir = Path(nidm_input_dir)
 
     if not nidm_input_dir.exists():
+        if explicit_nidm_input_dir:
+            logger.warning(f"--nidm-input-dir {nidm_input_dir} does not exist; "
+                           "NIDM will be built without an input document")
         nidm_input_dir = None
 
     # Per-subject output layout (study-wide standard): everything an app produces
@@ -129,6 +133,75 @@ def subject_output_dir(output_dir, participant_label, session=None):
     return subject_dir
 
 
+class NIDMInputNotRetrieved(FileNotFoundError):
+    """The subject's NIDM input is a symlink with no content behind it.
+
+    That is what a datalad/git-annex clone looks like before ``datalad get``.
+    It is not the same as the subject having no NIDM record: treating it as
+    a miss would build nidm.ttl without the inherited demographics and
+    provenance and still exit 0, for every subject in the dataset.
+    """
+
+
+def find_nidm_input_file(nidm_input_dir, participant_label, session=None, warn=False):
+    """This subject's existing NIDM document, or None.
+
+    Candidates are tried most specific first, and are the same as ants-nidm's
+    find_nidm_input_file. The per-subject nidm.ttl layout comes first because
+    that is what the shared NIDM datasets use (e.g. nidm_4.5.0/sub-<id>/nidm.ttl);
+    the sub-<id>.ttl and flat forms are kept for older or hand-built inputs.
+
+    There is no "any top-level file" fallback: in a flat directory of
+    per-subject files it handed every subject whichever file was listed first,
+    usually another subject's record. A root-level nidm.ttl is accepted as a
+    dataset-level document covering all subjects.
+
+    The first candidate present decides. A dangling symlink (annexed content
+    not fetched) raises NIDMInputNotRetrieved rather than falling through.
+    With warn=True, a miss in an existing input directory is logged as a
+    warning.
+    """
+    if nidm_input_dir is None:
+        return None
+    nidm_input_dir = Path(nidm_input_dir)
+    if not nidm_input_dir.exists():
+        return None
+
+    subject_dirname = f"sub-{participant_label}"
+    candidates = []
+    if session:
+        candidates += [
+            nidm_input_dir / subject_dirname / f"ses-{session}" / "nidm.ttl",
+            nidm_input_dir / f"{subject_dirname}_ses-{session}" / "nidm.ttl",
+            nidm_input_dir / subject_dirname / f"ses-{session}" / f"{subject_dirname}_ses-{session}.ttl",
+            nidm_input_dir / f"{subject_dirname}_ses-{session}.ttl",
+        ]
+    candidates += [
+        nidm_input_dir / subject_dirname / "nidm.ttl",
+        nidm_input_dir / subject_dirname / f"{subject_dirname}.ttl",
+        nidm_input_dir / f"{subject_dirname}.ttl",
+        # Dataset-level document covering all subjects.
+        nidm_input_dir / "nidm.ttl",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+        if c.is_symlink():
+            raise NIDMInputNotRetrieved(
+                f"NIDM input {c} is a symlink with no content behind it "
+                f"(run `datalad get` on the NIDM input dataset)"
+            )
+
+    if warn:
+        logger.warning(
+            f"No NIDM input for {subject_dirname}"
+            + (f" ses-{session}" if session else "")
+            + f" in {nidm_input_dir}; nidm.ttl will not include its"
+            " demographics or input provenance"
+        )
+    return None
+
+
 def nidm_conversion(
     output_dir,
     participant_label,
@@ -173,28 +246,7 @@ def nidm_conversion(
 
     os.makedirs(nidm_dir, exist_ok=True)
 
-    existing_nidm_file = None
-    if nidm_input_dir and nidm_input_dir.exists():
-        # Look for an existing NIDM file to append to, most specific first.
-        # Supports both the legacy single-file layout (top-level nidm.ttl) and
-        # the per-subject layout used by newer NIDM datasets (e.g. nidm_4.5.0:
-        # sub-<id>/nidm.ttl, optionally nested under a ses-<id> subdir).
-        subject_dirname = f"sub-{participant_label}"
-        candidates = []
-        if bids_session:
-            candidates.append(nidm_input_dir / subject_dirname / f"ses-{bids_session}" / "nidm.ttl")
-            candidates.append(nidm_input_dir / f"{subject_dirname}_ses-{bids_session}" / "nidm.ttl")
-        candidates.append(nidm_input_dir / subject_dirname / "nidm.ttl")
-        candidates.append(nidm_input_dir / "nidm.ttl")
-        existing_nidm_file = next((c for c in candidates if c.exists()), None)
-        if existing_nidm_file is None:
-            # Legacy fallback: any top-level serialized NIDM file.
-            for pattern in ("*.ttl", "*.jsonld", "*.json-ld"):
-                try:
-                    existing_nidm_file = next(nidm_input_dir.glob(pattern))
-                    break
-                except StopIteration:
-                    continue
+    existing_nidm_file = find_nidm_input_file(nidm_input_dir, participant_label, bids_session)
 
     # Build the command
     module_name = "segstats_jsonld.fs_to_nidm"
@@ -430,6 +482,11 @@ def process_participant(
 
     # Run participant analysis
     try:
+        # Look the NIDM input up before recon-all: an unfetched annex file is
+        # an error, and it should cost seconds, not hours of reconstruction.
+        if not skip_nidm:
+            find_nidm_input_file(nidm_input_dir, participant_label, detected_session, warn=True)
+
         if skip_freesurfer:
             # Validate that FreeSurfer outputs exist
             fs_output_subject_id = (
@@ -557,6 +614,11 @@ def process_session(
 
     # Run session-level analysis
     try:
+        # Look the NIDM input up before recon-all: an unfetched annex file is
+        # an error, and it should cost seconds, not hours of reconstruction.
+        if not skip_nidm:
+            find_nidm_input_file(nidm_input_dir, participant_label, session_label, warn=True)
+
         if skip_freesurfer:
             # Validate that session-specific FreeSurfer outputs exist.
             fs_output_subject_id = f"{fs_subject_id}_ses-{session_label}"
