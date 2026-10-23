@@ -37,10 +37,12 @@ def test_image_version_label_is_the_app_version():
     singularity = (ROOT / "Singularity").read_text()
     labels = singularity.split("\n%labels\n", 1)[1].split("\n%", 1)[0]
     assert "org.opencontainers.image.version" not in labels
+    # Only %post: the same line in another section would not label the image.
+    post_section = singularity.split("\n%post\n", 1)[1].split("\n%", 1)[0]
     post = re.findall(
         r'^\s+echo "org\.opencontainers\.image\.version (\S+)" '
         r'>> "\$\{APPTAINER_LABELS:-\$SINGULARITY_LABELS\}"$',
-        singularity, re.MULTILINE,
+        post_section, re.MULTILINE,
     )
     assert post == [VERSION]
     docker = re.findall(
