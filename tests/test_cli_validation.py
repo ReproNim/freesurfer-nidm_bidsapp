@@ -439,10 +439,11 @@ class TestNIDMInputPreflight:
     def test_missing_explicit_input_dir_is_a_usage_error(self, tmp_path, bids_single_session):
         """An explicit directory that is not there used to warn and build NIDM
         without the input; it is now rejected before any processing, also
-        under --skip-nidm, and so is a file given in its place."""
+        under --skip-nidm, and so is a file given in its place or an empty
+        value (an unset wrapper variable, which would resolve to the cwd)."""
         a_file = tmp_path / "nidm.ttl"
         a_file.write_text("")
-        for bad in (tmp_path / "absent", a_file):
+        for bad in (tmp_path / "absent", a_file, ""):
             for extra in ((), ('--skip-nidm',)):
                 result, mock_wrapper = self._invoke(
                     bids_single_session, tmp_path / "out", 'participant',

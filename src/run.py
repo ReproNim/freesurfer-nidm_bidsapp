@@ -715,6 +715,19 @@ def process_session(
     return 0
 
 
+class _NonEmptyPath(click.Path):
+    """click.Path that also rejects an empty value.
+
+    With resolve_path, "" (an unset variable in a wrapper) would resolve to the
+    current directory, which can hold a previous run's output.
+    """
+
+    def convert(self, value, param, ctx):
+        if isinstance(value, str) and not value.strip():
+            self.fail("must not be empty", param, ctx)
+        return super().convert(value, param, ctx)
+
+
 @click.command()
 @click.version_option(version=__version__)
 @click.argument("bids_dir", type=click.Path(exists=True, file_okay=False, resolve_path=True))
@@ -754,7 +767,7 @@ def process_session(
     # exists=True: an explicit directory that is not there is a typo or a
     # missing mount, so it is a usage error before any processing. The
     # default (<bids_dir>/../NIDM, what BABS relies on) may still be absent.
-    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    type=_NonEmptyPath(exists=True, file_okay=False, resolve_path=True),
     default=None,
     help="Path to an existing NIDM files directory (must exist if given). Defaults to <bids_dir>/../NIDM for BABS workflows.",
 )
