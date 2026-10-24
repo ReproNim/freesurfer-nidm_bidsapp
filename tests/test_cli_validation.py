@@ -452,6 +452,22 @@ class TestNIDMInputPreflight:
                 assert "--nidm-input-dir" in result.output
                 mock_wrapper.assert_not_called()
 
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can search any directory")
+    def test_unsearchable_explicit_input_dir_is_a_usage_error(self, tmp_path, bids_single_session):
+        """r-- passes click's readable check, but the per-subject lookup needs
+        search permission and would raise PermissionError mid-run."""
+        locked = tmp_path / "read_only_nidm"
+        locked.mkdir(mode=0o444)
+        try:
+            result, mock_wrapper = self._invoke(
+                bids_single_session, tmp_path / "out", 'participant',
+                '--nidm-input-dir', str(locked))
+        finally:
+            locked.chmod(0o700)
+        assert result.exit_code == 2, result.output
+        assert "not searchable" in result.output
+        mock_wrapper.assert_not_called()
+
     def test_empty_explicit_input_dir_is_accepted(self, tmp_path, bids_single_session):
         empty = tmp_path / "empty_nidm"
         empty.mkdir()

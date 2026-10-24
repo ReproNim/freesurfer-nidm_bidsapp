@@ -716,16 +716,20 @@ def process_session(
 
 
 class _NonEmptyPath(click.Path):
-    """click.Path that also rejects an empty value.
+    """click.Path that also rejects an empty value and an unsearchable directory.
 
     With resolve_path, "" (an unset variable in a wrapper) would resolve to the
-    current directory, which can hold a previous run's output.
+    current directory, which can hold a previous run's output. click's readable
+    check is R_OK only; without X_OK the NIDM lookup raises PermissionError.
     """
 
     def convert(self, value, param, ctx):
         if isinstance(value, str) and not value.strip():
             self.fail("must not be empty", param, ctx)
-        return super().convert(value, param, ctx)
+        rv = super().convert(value, param, ctx)
+        if not os.access(rv, os.X_OK):
+            self.fail(f"{rv!r} is not searchable", param, ctx)
+        return rv
 
 
 @click.command()
