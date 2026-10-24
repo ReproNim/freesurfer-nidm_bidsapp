@@ -436,15 +436,29 @@ class TestNIDMInputPreflight:
         assert result.exit_code == 0, result.output
         mock_wrapper.return_value.process_subject.assert_called_once()
 
-    def test_missing_explicit_input_dir_is_a_warning(self, tmp_path, bids_single_session, caplog):
-        import logging
+    def test_missing_explicit_input_dir_is_a_usage_error(self, tmp_path, bids_single_session):
+        """An explicit directory that is not there used to warn and build NIDM
+        without the input; it is now rejected before any processing, also
+        under --skip-nidm, and so is a file given in its place."""
+        a_file = tmp_path / "nidm.ttl"
+        a_file.write_text("")
+        for bad in (tmp_path / "absent", a_file):
+            for extra in ((), ('--skip-nidm',)):
+                result, mock_wrapper = self._invoke(
+                    bids_single_session, tmp_path / "out", 'participant',
+                    *extra, '--nidm-input-dir', str(bad))
+                assert result.exit_code == 2, result.output
+                assert "--nidm-input-dir" in result.output
+                mock_wrapper.assert_not_called()
 
-        with caplog.at_level(logging.WARNING, logger="freesurfer-nidm"):
-            result, _ = self._invoke(
-                bids_single_session, tmp_path / "out", 'participant',
-                '--skip-nidm', '--nidm-input-dir', str(tmp_path / "absent"))
+    def test_empty_explicit_input_dir_is_accepted(self, tmp_path, bids_single_session):
+        empty = tmp_path / "empty_nidm"
+        empty.mkdir()
+        result, mock_wrapper = self._invoke(
+            bids_single_session, tmp_path / "out", 'participant',
+            '--skip-nidm', '--nidm-input-dir', str(empty))
         assert result.exit_code == 0, result.output
-        assert any("does not exist" in r.getMessage() for r in caplog.records)
+        mock_wrapper.return_value.process_subject.assert_called_once()
 
 
 class TestSkipFreesurferUsesRecordedInputs:

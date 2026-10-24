@@ -59,16 +59,14 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
     bids_dir = Path(bids_dir)
 
     # Use CLI argument if provided, otherwise default to BABS location
-    explicit_nidm_input_dir = nidm_input_dir is not None
     if nidm_input_dir is None:
         nidm_input_dir = bids_dir.parent / "NIDM"
     else:
         nidm_input_dir = Path(nidm_input_dir)
 
+    # The CLI already rejected a missing explicit --nidm-input-dir; only the
+    # default location can be absent here.
     if not nidm_input_dir.exists():
-        if explicit_nidm_input_dir:
-            logger.warning(f"--nidm-input-dir {nidm_input_dir} does not exist; "
-                           "NIDM will be built without an input document")
         nidm_input_dir = None
 
     # Per-subject output layout (study-wide standard): everything an app produces
@@ -753,9 +751,12 @@ def process_session(
 @click.option("--skip_nidm", "--skip-nidm", is_flag=True, help="Skip NIDM output generation.")
 @click.option(
     "--nidm-input-dir",
-    type=click.Path(exists=False, file_okay=False, resolve_path=True),
+    # exists=True: an explicit directory that is not there is a typo or a
+    # missing mount, so it is a usage error before any processing. The
+    # default (<bids_dir>/../NIDM, what BABS relies on) may still be absent.
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
     default=None,
-    help="Path to existing NIDM files directory. Defaults to <bids_dir>/../NIDM for BABS workflows.",
+    help="Path to an existing NIDM files directory (must exist if given). Defaults to <bids_dir>/../NIDM for BABS workflows.",
 )
 @click.option(
     "--max-voxel-size",
