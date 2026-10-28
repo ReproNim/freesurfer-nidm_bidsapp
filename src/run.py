@@ -242,7 +242,11 @@ def nidm_conversion(
     t1_images = t1_info.get('T1w_images', [])
     t2_images = t1_info.get('T2w_images', [])
     if not t1_images:
-        logger.warning(f"No T1 image information found for {fs_subject_id}")
+        logger.warning(
+            f"No record of the T1w recon-all used for {fs_subject_id}; with an input NIDM "
+            "the FreeSurfer stats are linked to an acquisition only if it has a single "
+            "anatomical one for this subject"
+        )
 
     os.makedirs(nidm_dir, exist_ok=True)
 
@@ -274,6 +278,11 @@ def nidm_conversion(
 
     # Build command: use -n for existing NIDM file, -o for new output
     # Note: fs_to_nidm does not allow both -n and -o at the same time
+    # -subjid: the recon-all tree is <subject dir>/freesurfer, and fs_to_nidm would
+    # otherwise take the subject ID from that directory name ("freesurfer") and
+    # attach every measure to a new agent instead of the input NIDM's subject.
+    # fs_to_nidm strips "sub-" and leading zeros to match the input's ID.
+    subjid_args = ["-subjid", f"sub-{participant_label}"]
     if copied_nidm:
         # NOTE: do NOT pass -j here. In fs_to_nidm's append branch the per-stats-file
         # loop accumulates by re-reading the -n file each iteration and writing back to
@@ -281,12 +290,19 @@ def nidm_conversion(
         # iteration re-reads the *unmodified* -n file and every stats file except the
         # last-globbed one is silently discarded (135 vs 5188 measurements on ABIDE
         # sub-0051456, and nondeterministic because glob order is filesystem-dependent).
-        cmd = [sys.executable, "-m", module_name, "-s", subject_dir, "-n", str(copied_nidm), "--forcenidm"]
+        cmd = [sys.executable, "-m", module_name, "-s", subject_dir, *subjid_args, "-n", str(copied_nidm), "--forcenidm"]
+        # A subject can have several anatomical acquisitions in the input (other
+        # sessions, acq- variants, repeated runs); name every T1w recon-all used so
+        # the stats link to exactly those.
+        # (No T1w record is logged above; fs_to_nidm then links only a single
+        # anatomical acquisition.)
+        if t1_images:
+            cmd += ["-acq_filename", *(os.path.basename(str(p)) for p in t1_images)]
         if verbose:
             logger.info(f"Found existing NIDM file: {existing_nidm_file}")
             logger.info(f"Adding data to existing NIDM file: {copied_nidm}")
     else:
-        cmd = [sys.executable, "-m", module_name, "-s", subject_dir, "-o", str(nidm_dir), "-j"]
+        cmd = [sys.executable, "-m", module_name, "-s", subject_dir, *subjid_args, "-o", str(nidm_dir), "-j"]
         if nidm_input_dir and verbose:
             logger.info(f"No NIDM file found in {nidm_input_dir}; creating new output")
 
@@ -314,7 +330,12 @@ def nidm_conversion(
         if verbose:
             logger.error(f"Command output: {result.stdout}")
         sys.exit(1)
-    
+    # fs_to_nidm reports a run it completed with reduced provenance (e.g. stats
+    # left unlinked to an acquisition) only as a Python warning on stderr.
+    for line in result.stderr.splitlines():
+        if "UserWarning:" in line:
+            logger.warning(f"fs_to_nidm: {line.split('UserWarning:', 1)[1].strip()}")
+
     # Log what files exist in output directory after conversion. These are the
     # intermediate converter outputs; the aggregated per-subject TTL is written
     # further below and logged separately.

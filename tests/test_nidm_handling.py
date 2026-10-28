@@ -412,6 +412,82 @@ class TestNIDMAppendCommand:
             )
             assert "--forcenidm" in cmd, f"expected --forcenidm in: {cmd}"
 
+    @pytest.mark.parametrize("with_input_nidm", [True, False])
+    def test_command_names_the_subject(self, tmp_path, bids_single_session, with_input_nidm):
+        """The recon-all tree is sub-<id>/freesurfer; without -subjid fs_to_nidm
+        names the subject "freesurfer" and attaches every measure to a new agent
+        instead of the input NIDM's subject (#21)."""
+        if with_input_nidm:
+            nidm_dir = bids_single_session.parent / "NIDM"
+            nidm_dir.mkdir()
+            (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .")
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        runner = CliRunner()
+        with patch('src.run.FreeSurferWrapper') as mock_wrapper, \
+             patch('src.run.subprocess.run') as mock_subprocess:
+            mock_wrapper.return_value.process_subject.return_value = True
+            mock_subprocess.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            runner.invoke(cli, [
+                str(bids_single_session),
+                str(output_dir),
+                'participant',
+                '--participant-label', '001',
+                '--skip-bids-validation'
+            ])
+
+            cmd = self._nidm_cmd(mock_subprocess)
+            assert cmd is not None, "fs_to_nidm was never invoked"
+            assert ("-n" in cmd) == with_input_nidm, cmd
+            assert "-subjid" in cmd, f"expected -subjid in: {cmd}"
+            assert cmd[cmd.index("-subjid") + 1] == "sub-001", cmd
+
+    def _append(self, tmp_path, t1_images, stderr=""):
+        from src.run import nidm_conversion
+        nidm_dir = tmp_path / "NIDM"
+        nidm_dir.mkdir()
+        (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .")
+        wrapper = MagicMock()
+        wrapper.get_subject_t1_info.return_value = {"T1w_images": t1_images, "T2w_images": []}
+        with patch('src.run.subprocess.run') as mock_subprocess:
+            mock_subprocess.return_value = MagicMock(returncode=0, stdout="", stderr=stderr)
+            nidm_conversion(tmp_path / "out", "001", wrapper, nidm_input_dir=nidm_dir)
+        cmd = self._nidm_cmd(mock_subprocess)
+        assert cmd is not None and "-n" in cmd, cmd
+        return cmd
+
+    @pytest.mark.parametrize("t1_images, expected", [
+        (["/bids/sub-001/ses-1/anat/sub-001_ses-1_run-1_T1w.nii.gz"], ["sub-001_ses-1_run-1_T1w.nii.gz"]),
+        # recon-all averages repeated runs; all of them are named
+        (["/bids/sub-001_run-1_T1w.nii.gz", "/bids/sub-001_run-2_T1w.nii.gz"],
+         ["sub-001_run-1_T1w.nii.gz", "sub-001_run-2_T1w.nii.gz"]),
+    ])
+    def test_append_names_the_t1w_recon_all_used(self, tmp_path, t1_images, expected):
+        """With several anatomical acquisitions in the input, fs_to_nidm links the
+        stats only to the ones named by -acq_filename."""
+        cmd = self._append(tmp_path, t1_images)
+        i = cmd.index("-acq_filename")
+        assert cmd[i + 1:i + 1 + len(expected)] == expected, cmd
+
+    def test_append_without_t1w_record_warns(self, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            cmd = self._append(tmp_path, [])
+        assert "-acq_filename" not in cmd, cmd
+        assert "No record of the T1w recon-all used" in caplog.text
+
+    def test_converter_warnings_reach_the_log(self, tmp_path, caplog):
+        stderr = ("A newer version (4.5.6) of incf-nidash/pynidm is available.\n"
+                  "/x/fs_to_nidm.py:369: UserWarning: 3 anatomical AcquisitionObjects found for subject "
+                  "sub-001; the stats are not linked to an acquisition\n"
+                  "  warnings.warn(\n")
+        with caplog.at_level("WARNING"):
+            self._append(tmp_path, [], stderr=stderr)
+        assert "fs_to_nidm: 3 anatomical AcquisitionObjects found" in caplog.text
+        assert "newer version" not in caplog.text
+
     def test_shared_cde_not_merged_into_per_subject_ttl(self, tmp_path, bids_single_session):
         """fs_cde.ttl must ship alongside, not be folded into each subject TTL.
 
