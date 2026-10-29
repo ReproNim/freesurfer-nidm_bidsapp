@@ -34,7 +34,7 @@ From: vnmd/freesurfer_8.0.0
     # same key in %labels (it warns "already exists ... not overwriting"); a
     # label written here replaces it either way. SingularityCE sets only
     # SINGULARITY_LABELS, hence the fallback.
-    echo "org.opencontainers.image.version 0.1.2" >> "${APPTAINER_LABELS:-$SINGULARITY_LABELS}"
+    echo "org.opencontainers.image.version 0.1.3" >> "${APPTAINER_LABELS:-$SINGULARITY_LABELS}"
 
     # Create opt directory for application code
     mkdir -p /opt
