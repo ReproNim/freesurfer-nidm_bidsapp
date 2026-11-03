@@ -281,7 +281,8 @@ def nidm_conversion(
     # -subjid: the recon-all tree is <subject dir>/freesurfer, and fs_to_nidm would
     # otherwise take the subject ID from that directory name ("freesurfer") and
     # attach every measure to a new agent instead of the input NIDM's subject.
-    # fs_to_nidm strips "sub-" and leading zeros to match the input's ID.
+    # With an input NIDM, fs_to_nidm strips "sub-" and leading zeros to match the
+    # input's ID; without one, the new subject agent's ID is "sub-<id>" as given.
     subjid_args = ["-subjid", f"sub-{participant_label}"]
     if copied_nidm:
         # NOTE: do NOT pass -j here. In fs_to_nidm's append branch the per-stats-file
@@ -309,7 +310,13 @@ def nidm_conversion(
     # Log the command for debugging and replay purposes
     logger.info(f"Running command: {' '.join(cmd)}")
 
-    existing_outputs = {path.name for path in Path(nidm_dir).glob("*")}
+    # Snapshot by modification time, not just name: a re-run (e.g. regenerating
+    # NIDM with --skip-freesurfer) rewrites the converter's files under the same
+    # names, and those are this run's outputs.
+    def _output_state():
+        return {path.name: (path.stat().st_mtime_ns, path.stat().st_size) for path in Path(nidm_dir).glob("*")}
+
+    existing_outputs = _output_state()
 
     env = os.environ.copy()
     project_root = Path(__file__).resolve().parents[1]
@@ -343,7 +350,9 @@ def nidm_conversion(
     for file in Path(nidm_dir).glob("*"):
         logger.info(f"  - {file.name} ({file.stat().st_size} bytes)")
 
-    new_outputs = [path for path in Path(nidm_dir).glob("*") if path.name not in existing_outputs]
+    current_outputs = _output_state()
+    new_outputs = [Path(nidm_dir) / name for name in sorted(current_outputs)
+                   if existing_outputs.get(name) != current_outputs[name]]
 
     if not new_outputs and not copied_nidm:
         logger.warning("No new NIDM outputs were generated; skipping aggregation step")

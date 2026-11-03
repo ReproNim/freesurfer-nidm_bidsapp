@@ -429,6 +429,8 @@ class TestNIDMAppendCommand:
         with patch('src.run.FreeSurferWrapper') as mock_wrapper, \
              patch('src.run.subprocess.run') as mock_subprocess:
             mock_wrapper.return_value.process_subject.return_value = True
+            mock_wrapper.return_value.get_subject_t1_info.return_value = {
+                "T1w_images": ["/bids/sub-001/anat/sub-001_T1w.nii.gz"], "T2w_images": []}
             mock_subprocess.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
             runner.invoke(cli, [
@@ -444,6 +446,8 @@ class TestNIDMAppendCommand:
             assert ("-n" in cmd) == with_input_nidm, cmd
             assert "-subjid" in cmd, f"expected -subjid in: {cmd}"
             assert cmd[cmd.index("-subjid") + 1] == "sub-001", cmd
+            if with_input_nidm:
+                assert cmd[cmd.index("-acq_filename"):] == ["-acq_filename", "sub-001_T1w.nii.gz"], cmd
 
     def _append(self, tmp_path, t1_images, stderr=""):
         from src.run import nidm_conversion
