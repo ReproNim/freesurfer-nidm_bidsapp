@@ -282,7 +282,8 @@ def nidm_conversion(
     # otherwise take the subject ID from that directory name ("freesurfer") and
     # attach every measure to a new agent instead of the input NIDM's subject.
     # With an input NIDM, fs_to_nidm strips "sub-" and leading zeros to match the
-    # input's ID; without one, the new subject agent's ID is "sub-<id>" as given.
+    # input's ID; without one, each stats file gets its own new subject agent
+    # with ID "sub-<id>" as given.
     subjid_args = ["-subjid", f"sub-{participant_label}"]
     if copied_nidm:
         # NOTE: do NOT pass -j here. In fs_to_nidm's append branch the per-stats-file
