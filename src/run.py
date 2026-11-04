@@ -290,9 +290,13 @@ def nidm_conversion(
     # -subjid: the recon-all tree is <subject dir>/freesurfer, and fs_to_nidm would
     # otherwise take the subject ID from that directory name ("freesurfer") and
     # attach every measure to a new agent instead of the input NIDM's subject.
-    # With an input NIDM, fs_to_nidm strips "sub-" and leading zeros to match the
-    # input's ID; without one, each stats file gets its own new subject agent
-    # with ID "sub-<id>" as given.
+    # With an input NIDM, fs_to_nidm compares IDs with a leading "sub-" and
+    # leading zeros removed on both sides (sub-0051456 matches 51456). If the
+    # input has subjects and none or several match, it fails and writes nothing,
+    # even with --forcenidm, which only adds a subject to an input that has none;
+    # the subject then fails with fs_to_nidm's message in the log. Without an
+    # input NIDM, each stats file gets its own new subject agent with ID
+    # "sub-<id>" as given.
     subjid_args = ["-subjid", f"sub-{participant_label}"]
     if copied_nidm:
         # NOTE: do NOT pass -j here. In fs_to_nidm's append branch the per-stats-file
@@ -301,6 +305,7 @@ def nidm_conversion(
         # iteration re-reads the *unmodified* -n file and every stats file except the
         # last-globbed one is silently discarded (135 vs 5188 measurements on ABIDE
         # sub-0051456, and nondeterministic because glob order is filesystem-dependent).
+        # fs_to_nidm 17f82df and later refuse -j with -s and -n instead.
         cmd = [sys.executable, "-m", module_name, "-s", subject_dir, *subjid_args, "-n", str(copied_nidm), "--forcenidm"]
         # A subject can have several anatomical acquisitions in the input (other
         # sessions, acq- variants, repeated runs); name every T1w recon-all used so
