@@ -3,8 +3,8 @@ click>=8.0.0
 pybids>=0.15.1
 pytest>=7.0.0
 # PyNIDM 5.0.0 declares rdflib>=6.3.2,<8 and oxrdflib~=0.5.0 (oxrdflib itself
-# requires rdflib<8). The image ships rdflib 7 (see the build files' upgrade).
-rdflib>=7.0.0,<8
+# requires rdflib<8). The lower bound is the current rdflib release.
+rdflib>=7.6.0,<8
 pynidm==5.0.0
 oxrdflib~=0.5.0
 # PyNIDM 5 no longer depends on prov, but the converter in src/segstats_jsonld
