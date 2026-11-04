@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import click
@@ -256,18 +257,26 @@ def nidm_conversion(
     module_name = "segstats_jsonld.fs_to_nidm"
     
     copied_nidm = None
+    final_nidm = Path(nidm_dir) / "nidm.ttl"
     if existing_nidm_file:
-        # Always copy to nidm.ttl regardless of the input's filename, so the
-        # append lands directly on the final product and legacy input names
-        # (e.g. sub-<id>.ttl) don't leak into the output.
-        copied_nidm = Path(nidm_dir) / "nidm.ttl"
+        # fs_to_nidm adds the stats to its -n file in place. Give it a temporary
+        # copy of the input next to nidm.ttl (it writes fs_cde.ttl beside its -n
+        # file) and rename the copy to nidm.ttl only after a successful run: a
+        # failed conversion then leaves no nidm.ttl, rather than an unmodified
+        # or half-written copy of the input that looks like a finished output.
+        # The input itself is never written, even when it is this nidm.ttl.
+        fd, tmp_name = tempfile.mkstemp(prefix=".nidm.", suffix=".ttl", dir=nidm_dir)
+        os.close(fd)
+        copied_nidm = Path(tmp_name)
         try:
-            if existing_nidm_file.resolve() != copied_nidm.resolve():
-                shutil.copy2(existing_nidm_file, copied_nidm)
-                logger.info(f"Copied existing NIDM file to output directory: {copied_nidm}")
-            else:
-                logger.info(f"Input and output NIDM paths are the same: {copied_nidm}")
+            shutil.copyfile(existing_nidm_file, copied_nidm)
+            # mkstemp makes the file private; give it the mode a new file gets
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(copied_nidm, 0o666 & ~umask)
+            logger.info(f"Copied existing NIDM file {existing_nidm_file} to {copied_nidm.name} for conversion")
         except OSError as copy_error:
+            copied_nidm.unlink(missing_ok=True)
             logger.error(
                 "Failed to copy existing NIDM file to output directory (%s). Error: %s",
                 copied_nidm,
@@ -330,14 +339,25 @@ def nidm_conversion(
     env.setdefault("SEGSTATS_JSONLD_ALLOW_NEW_KEYS", "1")
     env.pop("PYTHONHOME", None)
 
-    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    except BaseException:
+        if copied_nidm:
+            copied_nidm.unlink(missing_ok=True)
+        raise
 
     if result.returncode != 0:
         logger.error(f"NIDM conversion failed for {fs_subject_id}")
         logger.error(f"Error output: {result.stderr}")
         if result.stdout:
             logger.error(f"Command output: {result.stdout}")
+        if copied_nidm:
+            copied_nidm.unlink(missing_ok=True)
+            logger.error(f"No {final_nidm.name} written for {fs_subject_id}")
         sys.exit(1)
+    if copied_nidm:
+        os.replace(copied_nidm, final_nidm)
+        copied_nidm = final_nidm
     # fs_to_nidm reports a run it completed with reduced provenance (stats left
     # unlinked to an acquisition, a new subject agent under --forcenidm) only on
     # stderr, so every stderr line of a successful run is logged as a warning.

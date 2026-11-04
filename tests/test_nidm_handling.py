@@ -531,6 +531,42 @@ class TestNIDMAppendCommand:
         assert any("Subject ID sub-001 not found" in m for m in errors), errors
         assert any("Processing stats file: aseg.stats" in m for m in errors), errors
 
+    @pytest.mark.parametrize("write_partial", [False, True])
+    def test_failed_conversion_leaves_no_nidm_ttl(self, tmp_path, caplog, write_partial):
+        """The input NIDM is converted in a temporary copy; a failed conversion
+        must not leave the unmodified (or half-written) copy as nidm.ttl, where
+        it looks like a finished output."""
+        subject_dir = self._failed_append(tmp_path, caplog, write_partial=write_partial)
+        assert not (subject_dir / "nidm.ttl").exists()
+        assert [p.name for p in subject_dir.iterdir() if p.is_file()] == []
+
+    def test_append_converts_a_copy_and_renames_it_into_place(self, tmp_path):
+        """fs_to_nidm is pointed at a temporary file next to nidm.ttl, never at
+        nidm.ttl itself; on success the result is nidm.ttl."""
+        from src.run import nidm_conversion
+        nidm_dir = tmp_path / "NIDM"
+        nidm_dir.mkdir()
+        (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .")
+        wrapper = MagicMock()
+        wrapper.get_subject_t1_info.return_value = {"T1w_images": [], "T2w_images": []}
+        seen = {}
+
+        def convert(cmd, *args, **kwargs):
+            target = Path(cmd[cmd.index("-n") + 1])
+            seen["target"] = target
+            seen["nidm_ttl_existed"] = (target.parent / "nidm.ttl").exists()
+            target.write_text("@prefix : <http://example.org/> .\n:converted :x 1 .")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch('src.run.subprocess.run', side_effect=convert):
+            nidm_conversion(tmp_path / "out", "001", wrapper, nidm_input_dir=nidm_dir)
+        subject_dir = tmp_path / "out" / "sub-001"
+        assert seen["target"].parent == subject_dir
+        assert seen["target"].name != "nidm.ttl" and seen["target"].suffix == ".ttl"
+        assert not seen["nidm_ttl_existed"]
+        assert not seen["target"].exists()
+        assert ":converted" in (subject_dir / "nidm.ttl").read_text()
+
     def test_shared_cde_not_merged_into_per_subject_ttl(self, tmp_path, bids_single_session):
         """fs_cde.ttl must ship alongside, not be folded into each subject TTL.
 
