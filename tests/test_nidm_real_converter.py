@@ -128,3 +128,73 @@ def test_rerun_without_input_nidm_replaces_the_previous_output(tmp_path):
 
     assert "freesurfer" not in subject_ids(g)
     assert subject_ids(g) == {"sub-001"}
+
+
+SUBMODULE = REPO_ROOT / "src" / "segstats_jsonld"
+
+
+def _parse_with_checked_out_converter(tmp_path, with_input_nidm):
+    """Build the fs_to_nidm argv exactly as nidm_conversion does, then hand it
+    to the argument parser of the converter checked out at src/segstats_jsonld,
+    including main()'s own checks of the parsed arguments. Return the parsed
+    namespace. An option the pinned converter does not accept makes its parser
+    exit 2, which fails the test."""
+    import argparse
+    import importlib
+    import sys
+    from unittest.mock import patch
+
+    assert (SUBMODULE / "segstats_jsonld" / "fs_to_nidm.py").is_file(), (
+        f"{SUBMODULE} missing: check out the submodule (git submodule update --init)")
+
+    nidm_input_dir = None
+    if with_input_nidm:
+        nidm_input_dir = tmp_path / "NIDM"
+        (nidm_input_dir / "sub-001").mkdir(parents=True)
+        (nidm_input_dir / "sub-001" / "nidm.ttl").write_text(INPUT_TTL)
+    out = tmp_path / "out"
+    recon_all_tree(out)
+    wrapper = MagicMock()
+    wrapper.get_subject_t1_info.return_value = {
+        "T1w_images": ["/bids/sub-001/anat/sub-001_run-1_T1w.nii.gz"], "T2w_images": []}
+    with patch("src.run.subprocess.run") as run:
+        run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        nidm_conversion(str(out), "001", wrapper,
+                        nidm_input_dir=str(nidm_input_dir) if nidm_input_dir else None)
+    cmd = next(c.args[0] for c in run.call_args_list if "segstats_jsonld.fs_to_nidm" in c.args[0])
+    assert cmd[1:3] == ["-m", "segstats_jsonld.fs_to_nidm"], cmd
+
+    saved_path = list(sys.path)
+    saved = {n: m for n, m in sys.modules.items()
+             if n == "segstats_jsonld" or n.startswith("segstats_jsonld.")}
+    for n in saved:
+        del sys.modules[n]
+    sys.path.insert(0, str(SUBMODULE))
+    try:
+        converter = importlib.import_module(cmd[2])
+        assert Path(converter.__file__).resolve().is_relative_to(SUBMODULE.resolve()), converter.__file__
+        parsed = {}
+        with patch.object(converter, "_convert", lambda args: parsed.setdefault("args", args)), \
+             patch.object(sys, "argv", ["fs_to_nidm.py", *cmd[3:]]):
+            try:
+                converter.main()
+            except SystemExit as exc:
+                pytest.fail(f"the checked-out fs_to_nidm rejected the app's argv (exit {exc.code}): {cmd[3:]}")
+        assert "args" in parsed, "fs_to_nidm main() returned without converting"
+        return parsed["args"]
+    finally:
+        sys.path[:] = saved_path
+        for n in [n for n in sys.modules if n == "segstats_jsonld" or n.startswith("segstats_jsonld.")]:
+            del sys.modules[n]
+        sys.modules.update(saved)
+
+
+def test_checked_out_converter_accepts_the_argv_with_an_input_nidm(tmp_path):
+    args = _parse_with_checked_out_converter(tmp_path, with_input_nidm=True)
+    assert args.acq_filename == ["sub-001_run-1_T1w.nii.gz"]
+    assert args.forcenidm and args.nidm_file and args.subjid == "sub-001"
+
+
+def test_checked_out_converter_accepts_the_argv_without_an_input_nidm(tmp_path):
+    args = _parse_with_checked_out_converter(tmp_path, with_input_nidm=False)
+    assert args.nidm_file is None and args.jsonld and args.subjid == "sub-001"
