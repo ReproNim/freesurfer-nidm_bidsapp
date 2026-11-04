@@ -490,7 +490,46 @@ class TestNIDMAppendCommand:
         with caplog.at_level("WARNING"):
             self._append(tmp_path, [], stderr=stderr)
         assert "fs_to_nidm: 3 anatomical AcquisitionObjects found" in caplog.text
-        assert "newer version" not in caplog.text
+        # Every other stderr line of a successful run is logged too, line by
+        # line, so a message the relay does not recognise still reaches the log.
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert "fs_to_nidm: A newer version (4.5.6) of incf-nidash/pynidm is available." in warnings
+        assert "fs_to_nidm: warnings.warn(" in warnings
+
+    def test_converter_stderr_without_userwarning_reaches_the_log(self, tmp_path, caplog):
+        stderr = "The input NIDM has no subject agents; adding a new agent for sub-001 (--forcenidm)\n"
+        with caplog.at_level("WARNING"):
+            self._append(tmp_path, [], stderr=stderr)
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert ("fs_to_nidm: The input NIDM has no subject agents; adding a new agent for "
+                "sub-001 (--forcenidm)") in warnings
+
+    def _failed_append(self, tmp_path, caplog, write_partial=False):
+        """Run nidm_conversion with an input NIDM and a converter that fails."""
+        from src.run import nidm_conversion
+        nidm_dir = tmp_path / "NIDM"
+        nidm_dir.mkdir()
+        (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .")
+        wrapper = MagicMock()
+        wrapper.get_subject_t1_info.return_value = {"T1w_images": [], "T2w_images": []}
+
+        def failing_convert(cmd, *args, **kwargs):
+            if write_partial:
+                Path(cmd[cmd.index("-n") + 1]).write_text("@prefix : <http://example.org/> .\n:partial :x 1 .")
+            return MagicMock(returncode=1, stdout="Processing stats file: aseg.stats\n",
+                             stderr="fs_to_nidm.py: error: Subject ID sub-001 not found")
+
+        with patch('src.run.subprocess.run', side_effect=failing_convert), \
+             caplog.at_level("INFO"), pytest.raises(SystemExit) as exc:
+            nidm_conversion(tmp_path / "out", "001", wrapper, nidm_input_dir=nidm_dir)
+        assert exc.value.code == 1
+        return tmp_path / "out" / "sub-001"
+
+    def test_converter_failure_logs_stderr_and_stdout(self, tmp_path, caplog):
+        self._failed_append(tmp_path, caplog)
+        errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+        assert any("Subject ID sub-001 not found" in m for m in errors), errors
+        assert any("Processing stats file: aseg.stats" in m for m in errors), errors
 
     def test_shared_cde_not_merged_into_per_subject_ttl(self, tmp_path, bids_single_session):
         """fs_cde.ttl must ship alongside, not be folded into each subject TTL.

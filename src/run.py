@@ -335,14 +335,20 @@ def nidm_conversion(
     if result.returncode != 0:
         logger.error(f"NIDM conversion failed for {fs_subject_id}")
         logger.error(f"Error output: {result.stderr}")
-        if verbose:
+        if result.stdout:
             logger.error(f"Command output: {result.stdout}")
         sys.exit(1)
-    # fs_to_nidm reports a run it completed with reduced provenance (e.g. stats
-    # left unlinked to an acquisition) only as a Python warning on stderr.
+    # fs_to_nidm reports a run it completed with reduced provenance (stats left
+    # unlinked to an acquisition, a new subject agent under --forcenidm) only on
+    # stderr, so every stderr line of a successful run is logged as a warning.
+    # A Python warning is logged by its message, without the file:line prefix.
     for line in result.stderr.splitlines():
+        line = line.strip()
+        if not line:
+            continue
         if "UserWarning:" in line:
-            logger.warning(f"fs_to_nidm: {line.split('UserWarning:', 1)[1].strip()}")
+            line = line.split("UserWarning:", 1)[1].strip()
+        logger.warning(f"fs_to_nidm: {line}")
 
     # Log what files exist in output directory after conversion. These are the
     # intermediate converter outputs; the aggregated per-subject TTL is written
