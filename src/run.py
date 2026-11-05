@@ -214,7 +214,7 @@ CONVERTER_MODULE = "segstats_jsonld.fs_to_nidm"
 CONVERTER_BOOTSTRAP = (
     "import sys; "
     f"from {CONVERTER_MODULE} import main; "
-    "sys.argv[0] = 'fs_to_nidm'; "
+    'sys.argv[0] = "fs_to_nidm"; '
     "sys.exit(main())"
 )
 # The converter's checkout; nidm_conversion puts it on the converter's
