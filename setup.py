@@ -184,7 +184,6 @@ setup(
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Medical Science Apps.",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
@@ -194,6 +193,6 @@ setup(
             "freesurfer-nidm=src.run:cli",
         ],
     },
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     install_requires=install_requires,
 )
