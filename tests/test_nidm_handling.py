@@ -667,3 +667,134 @@ class TestNIDMDatasetDescription:
 
         assert desc["Name"] == "NIDM Derivatives"
         assert desc["DatasetType"] == "derivative"
+
+
+class TestNIDMTemporaryFile:
+    """With an input NIDM, fs_to_nidm converts a temporary copy
+    `.nidm.XXXX.ttl` in the subject directory, which becomes nidm.ttl only on
+    success."""
+
+    INPUT = "@prefix : <http://example.org/> .\n:input :x 1 .\n"
+
+    @staticmethod
+    def _wrapper():
+        wrapper = MagicMock()
+        wrapper.get_subject_t1_info.return_value = {"T1w_images": [], "T2w_images": []}
+        return wrapper
+
+    def _input_dir(self, tmp_path, mode=None):
+        nidm_dir = tmp_path / "NIDM"
+        nidm_dir.mkdir()
+        (nidm_dir / "nidm.ttl").write_text(self.INPUT)
+        if mode is not None:
+            (nidm_dir / "nidm.ttl").chmod(mode)
+        return nidm_dir
+
+    @staticmethod
+    def _converting(seen=None):
+        """A stand-in fs_to_nidm that appends to its -n file and succeeds."""
+        def convert(cmd, *args, **kwargs):
+            target = Path(cmd[cmd.index("-n") + 1])
+            if seen is not None:
+                seen["target"] = target
+                seen["inode"] = target.stat().st_ino
+            with open(target, "a") as f:
+                f.write(":converted :x 1 .\n")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return convert
+
+    @pytest.mark.parametrize("input_mode", [0o444, 0o600])
+    def test_nidm_ttl_gets_the_mode_of_a_new_file(self, tmp_path, input_mode):
+        """mkstemp creates the temporary file 0600; the result must get the mode
+        a new file gets under the umask, not 0600 and not the input's (a
+        git-annex input is read-only)."""
+        import os
+        from src.run import nidm_conversion
+        nidm_dir = self._input_dir(tmp_path, mode=input_mode)
+        old_umask = os.umask(0o022)
+        try:
+            with patch('src.run.subprocess.run', side_effect=self._converting()):
+                nidm_conversion(tmp_path / "out", "001", self._wrapper(), nidm_input_dir=nidm_dir)
+        finally:
+            os.umask(old_umask)
+        assert (tmp_path / "out" / "sub-001" / "nidm.ttl").stat().st_mode & 0o777 == 0o644
+
+    def test_nidm_ttl_is_the_converted_file_renamed_not_a_copy(self, tmp_path):
+        """os.replace, not a copy: the converted file itself becomes nidm.ttl,
+        atomically, so no reader ever sees a half-copied nidm.ttl."""
+        from src.run import nidm_conversion
+        seen = {}
+        with patch('src.run.subprocess.run', side_effect=self._converting(seen)):
+            nidm_conversion(tmp_path / "out", "001", self._wrapper(),
+                            nidm_input_dir=self._input_dir(tmp_path))
+        result = tmp_path / "out" / "sub-001" / "nidm.ttl"
+        assert result.stat().st_ino == seen["inode"]
+        assert not seen["target"].exists()
+
+    @pytest.mark.parametrize("raised", [KeyboardInterrupt, SystemExit, OSError])
+    def test_an_exception_during_conversion_leaves_no_temporary(self, tmp_path, raised):
+        from src.run import nidm_conversion
+
+        def interrupted(cmd, *args, **kwargs):
+            assert Path(cmd[cmd.index("-n") + 1]).exists()
+            raise raised()
+
+        with patch('src.run.subprocess.run', side_effect=interrupted), pytest.raises(raised):
+            nidm_conversion(tmp_path / "out", "001", self._wrapper(),
+                            nidm_input_dir=self._input_dir(tmp_path))
+        assert [p.name for p in (tmp_path / "out" / "sub-001").iterdir() if p.is_file()] == []
+
+    def test_a_temporary_left_by_an_interrupted_run_is_removed_and_not_merged(self, tmp_path):
+        """A run killed while converting leaves its `.nidm.XXXX.ttl`. The next
+        run removes it before converting, and never merges such a file into
+        nidm.ttl (an orphaned converter can rewrite it while the next run's
+        converter runs, and every changed .ttl in the directory is merged)."""
+        from src.run import nidm_conversion
+        subject_dir = tmp_path / "out" / "sub-001"
+        subject_dir.mkdir(parents=True)
+        stale = subject_dir / ".nidm.k1ll3d00.ttl"
+        stale.write_text("@prefix : <http://example.org/> .\n:stale :x 1 .\n")
+        convert = self._converting()
+
+        def orphan_rewrites_its_temporary(cmd, *args, **kwargs):
+            orphan = subject_dir / ".nidm.0rphan00.ttl"
+            orphan.write_text("@prefix : <http://example.org/> .\n:orphan :x 1 .\n")
+            return convert(cmd, *args, **kwargs)
+
+        with patch('src.run.subprocess.run', side_effect=orphan_rewrites_its_temporary):
+            nidm_conversion(tmp_path / "out", "001", self._wrapper(),
+                            nidm_input_dir=self._input_dir(tmp_path))
+        text = (subject_dir / "nidm.ttl").read_text()
+        assert ":converted" in text
+        assert "stale" not in text and "orphan" not in text
+        assert not stale.exists()
+
+    def test_sigterm_during_conversion_leaves_no_temporary(self, tmp_path):
+        """SIGTERM (a time limit, scancel) used to kill the app without any
+        cleanup, leaving the temporary copy behind. Run in a child process,
+        so the test runner itself is not the one terminated."""
+        import subprocess
+        import sys
+        out = tmp_path / "out"
+        nidm_dir = self._input_dir(tmp_path)
+        child = f"""
+import os, signal
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+from src.run import nidm_conversion
+
+def terminated(cmd, *args, **kwargs):
+    assert Path(cmd[cmd.index("-n") + 1]).exists()
+    os.kill(os.getpid(), signal.SIGTERM)
+    raise AssertionError("SIGTERM did not interrupt the conversion")
+
+wrapper = MagicMock()
+wrapper.get_subject_t1_info.return_value = {{"T1w_images": [], "T2w_images": []}}
+with patch("src.run.subprocess.run", side_effect=terminated):
+    nidm_conversion({str(out)!r}, "001", wrapper, nidm_input_dir={str(nidm_dir)!r})
+"""
+        repo_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run([sys.executable, "-c", child], cwd=repo_root,
+                                capture_output=True, text=True, timeout=120)
+        assert result.returncode == 143, (result.returncode, result.stderr[-2000:])
+        assert [p.name for p in (out / "sub-001").iterdir() if p.is_file()] == []

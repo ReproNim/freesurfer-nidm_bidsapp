@@ -6,10 +6,12 @@ This BIDS App runs FreeSurfer's recon-all pipeline on T1w and optionally T2w ima
 from a BIDS dataset and outputs both standard FreeSurfer results and NIDM format results.
 """
 
+import contextlib
 import logging
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -290,6 +292,36 @@ def check_nidm_input(nidm_input_dir, participant_label, session):
     sys.exit(1)
 
 
+# nidm_conversion's temporary copy of the input NIDM: <subject dir>/.nidm.XXXX.ttl
+TEMPORARY_PREFIX = ".nidm."
+
+
+def _remove_interrupted_temporaries(nidm_dir):
+    """Delete temporary copies left in nidm_dir by a run that was killed while
+    converting (SIGKILL, or a node failure), before this run converts."""
+    for leftover in sorted(Path(nidm_dir).glob(f"{TEMPORARY_PREFIX}*.ttl")):
+        logger.warning(f"Removing {leftover.name}, a temporary NIDM file left by an interrupted run")
+        leftover.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def _exit_on_sigterm():
+    """Raise SystemExit(143) on SIGTERM while active, so finally blocks run;
+    Python's default SIGTERM action ends the process without them."""
+    def _raise(signum, frame):
+        raise SystemExit(128 + signum)
+
+    try:
+        previous = signal.signal(signal.SIGTERM, _raise)
+    except ValueError:  # not the main thread; leave SIGTERM alone
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 def nidm_conversion(
     output_dir,
     participant_label,
@@ -337,119 +369,127 @@ def nidm_conversion(
         )
 
     os.makedirs(nidm_dir, exist_ok=True)
+    _remove_interrupted_temporaries(nidm_dir)
 
     existing_nidm_file = find_nidm_input_file(nidm_input_dir, participant_label, bids_session)
 
     # Build the command
     converter = [sys.executable, "-c", CONVERTER_BOOTSTRAP]
 
-    copied_nidm = None
-    final_nidm = Path(nidm_dir) / "nidm.ttl"
-    if existing_nidm_file:
-        # fs_to_nidm adds the stats to its -n file in place. Give it a temporary
-        # copy of the input next to nidm.ttl (it writes fs_cde.ttl beside its -n
-        # file) and rename the copy to nidm.ttl only after a successful run: a
-        # failed conversion then leaves no nidm.ttl, rather than an unmodified
-        # or half-written copy of the input that looks like a finished output.
-        # The input itself is never written, even when it is this nidm.ttl.
-        fd, tmp_name = tempfile.mkstemp(prefix=".nidm.", suffix=".ttl", dir=nidm_dir)
-        os.close(fd)
-        copied_nidm = Path(tmp_name)
+    # From the temporary copy's creation to its rename into nidm.ttl, remove it
+    # on any exit: a failed conversion, an exception, Ctrl-C, or SIGTERM (a
+    # time limit, scancel), which is turned into SystemExit for this stretch
+    # so the cleanup runs (subprocess.run then also kills fs_to_nidm).
+    pending = None
+    with _exit_on_sigterm():
         try:
-            shutil.copyfile(existing_nidm_file, copied_nidm)
-            # mkstemp makes the file private; give it the mode a new file gets
-            umask = os.umask(0)
-            os.umask(umask)
-            os.chmod(copied_nidm, 0o666 & ~umask)
-            logger.info(f"Copied existing NIDM file {existing_nidm_file} to {copied_nidm.name} for conversion")
-        except OSError as copy_error:
-            copied_nidm.unlink(missing_ok=True)
-            logger.error(
-                "Failed to copy existing NIDM file to output directory (%s). Error: %s",
-                copied_nidm,
-                copy_error,
-            )
-            logger.error("Cannot proceed without copying to avoid overwriting input file.")
-            sys.exit(1)
+            copied_nidm = None
+            final_nidm = Path(nidm_dir) / "nidm.ttl"
+            if existing_nidm_file:
+                # fs_to_nidm adds the stats to its -n file in place. Give it a temporary
+                # copy of the input next to nidm.ttl (it writes fs_cde.ttl beside its -n
+                # file) and rename the copy to nidm.ttl only after a successful run: a
+                # failed conversion then leaves no nidm.ttl, rather than an unmodified
+                # or half-written copy of the input that looks like a finished output.
+                # The input itself is never written, even when it is this nidm.ttl.
+                fd, tmp_name = tempfile.mkstemp(prefix=TEMPORARY_PREFIX, suffix=".ttl", dir=nidm_dir)
+                os.close(fd)
+                copied_nidm = Path(tmp_name)
+                pending = copied_nidm
+                try:
+                    shutil.copyfile(existing_nidm_file, copied_nidm)
+                    # mkstemp makes the file private; give it the mode a new file gets
+                    umask = os.umask(0)
+                    os.umask(umask)
+                    os.chmod(copied_nidm, 0o666 & ~umask)
+                    logger.info(f"Copied existing NIDM file {existing_nidm_file} to {copied_nidm.name} for conversion")
+                except OSError as copy_error:
+                    copied_nidm.unlink(missing_ok=True)
+                    logger.error(
+                        "Failed to copy existing NIDM file to output directory (%s). Error: %s",
+                        copied_nidm,
+                        copy_error,
+                    )
+                    logger.error("Cannot proceed without copying to avoid overwriting input file.")
+                    sys.exit(1)
 
-    # Build command: use -n for existing NIDM file, -o for new output
-    # Note: fs_to_nidm does not allow both -n and -o at the same time
-    # -subjid: the recon-all tree is <subject dir>/freesurfer, and fs_to_nidm would
-    # otherwise take the subject ID from that directory name ("freesurfer") and
-    # attach every measure to a new agent instead of the input NIDM's subject.
-    # With an input NIDM, fs_to_nidm compares IDs with a leading "sub-" and
-    # leading zeros removed on both sides (sub-0051456 matches 51456). If the
-    # input has subjects and none or several match, it fails and writes nothing,
-    # even with --forcenidm, which only adds a subject to an input that has none;
-    # the subject then fails with fs_to_nidm's message in the log. Without an
-    # input NIDM, each stats file gets its own new subject agent with ID
-    # "sub-<id>" as given.
-    subjid_args = ["-subjid", converter_subject_id(participant_label)]
-    if copied_nidm:
-        # NOTE: do NOT pass -j here. In fs_to_nidm's append branch the per-stats-file
-        # loop accumulates by re-reading the -n file each iteration and writing back to
-        # it. With -j the result is written to "<nidm_file>.json" instead, so the next
-        # iteration re-reads the *unmodified* -n file and every stats file except the
-        # last-globbed one is silently discarded (135 vs 5188 measurements on ABIDE
-        # sub-0051456, and nondeterministic because glob order is filesystem-dependent).
-        # fs_to_nidm 17f82df and later refuse -j with -s and -n instead.
-        cmd = [*converter, "-s", subject_dir, *subjid_args, "-n", str(copied_nidm), "--forcenidm"]
-        # A subject can have several anatomical acquisitions in the input (other
-        # sessions, acq- variants, repeated runs); name every T1w recon-all used so
-        # the stats link to exactly those.
-        # (No T1w record is logged above; fs_to_nidm then links only a single
-        # anatomical acquisition.)
-        if t1_images:
-            cmd += ["-acq_filename", *(os.path.basename(str(p)) for p in t1_images)]
-        if verbose:
-            logger.info(f"Found existing NIDM file: {existing_nidm_file}")
-            logger.info(f"Adding data to existing NIDM file: {copied_nidm}")
-    else:
-        cmd = [*converter, "-s", subject_dir, *subjid_args, "-o", str(nidm_dir), "-j"]
-        if nidm_input_dir and verbose:
-            logger.info(f"No NIDM file found in {nidm_input_dir}; creating new output")
+            # Build command: use -n for existing NIDM file, -o for new output
+            # Note: fs_to_nidm does not allow both -n and -o at the same time
+            # -subjid: the recon-all tree is <subject dir>/freesurfer, and fs_to_nidm would
+            # otherwise take the subject ID from that directory name ("freesurfer") and
+            # attach every measure to a new agent instead of the input NIDM's subject.
+            # With an input NIDM, fs_to_nidm compares IDs with a leading "sub-" and
+            # leading zeros removed on both sides (sub-0051456 matches 51456). If the
+            # input has subjects and none or several match, it fails and writes nothing,
+            # even with --forcenidm, which only adds a subject to an input that has none;
+            # the subject then fails with fs_to_nidm's message in the log. Without an
+            # input NIDM, each stats file gets its own new subject agent with ID
+            # "sub-<id>" as given.
+            subjid_args = ["-subjid", converter_subject_id(participant_label)]
+            if copied_nidm:
+                # NOTE: do NOT pass -j here. In fs_to_nidm's append branch the per-stats-file
+                # loop accumulates by re-reading the -n file each iteration and writing back to
+                # it. With -j the result is written to "<nidm_file>.json" instead, so the next
+                # iteration re-reads the *unmodified* -n file and every stats file except the
+                # last-globbed one is silently discarded (135 vs 5188 measurements on ABIDE
+                # sub-0051456, and nondeterministic because glob order is filesystem-dependent).
+                # fs_to_nidm 17f82df and later refuse -j with -s and -n instead.
+                cmd = [*converter, "-s", subject_dir, *subjid_args, "-n", str(copied_nidm), "--forcenidm"]
+                # A subject can have several anatomical acquisitions in the input (other
+                # sessions, acq- variants, repeated runs); name every T1w recon-all used so
+                # the stats link to exactly those.
+                # (No T1w record is logged above; fs_to_nidm then links only a single
+                # anatomical acquisition.)
+                if t1_images:
+                    cmd += ["-acq_filename", *(os.path.basename(str(p)) for p in t1_images)]
+                if verbose:
+                    logger.info(f"Found existing NIDM file: {existing_nidm_file}")
+                    logger.info(f"Adding data to existing NIDM file: {copied_nidm}")
+            else:
+                cmd = [*converter, "-s", subject_dir, *subjid_args, "-o", str(nidm_dir), "-j"]
+                if nidm_input_dir and verbose:
+                    logger.info(f"No NIDM file found in {nidm_input_dir}; creating new output")
 
-    # Log the command for debugging and replay purposes
-    logger.info(f"Running command: {shlex.join(cmd)}")
+            # Log the command for debugging and replay purposes
+            logger.info(f"Running command: {shlex.join(cmd)}")
 
-    # Snapshot by modification time, not just name: a re-run (e.g. regenerating
-    # NIDM with --skip-freesurfer) rewrites the converter's files under the same
-    # names, and those are this run's outputs.
-    def _output_state():
-        return {path.name: (path.stat().st_mtime_ns, path.stat().st_size) for path in Path(nidm_dir).glob("*")}
+            # Snapshot by modification time, not just name: a re-run (e.g. regenerating
+            # NIDM with --skip-freesurfer) rewrites the converter's files under the same
+            # names, and those are this run's outputs.
+            def _output_state():
+                return {path.name: (path.stat().st_mtime_ns, path.stat().st_size) for path in Path(nidm_dir).glob("*")}
 
-    existing_outputs = _output_state()
+            existing_outputs = _output_state()
 
-    env = os.environ.copy()
-    project_root = Path(__file__).resolve().parents[1]
-    existing_pythonpath = env.get("PYTHONPATH")
-    pythonpath_entries = [str(project_root), str(project_root / "src"), str(project_root / "src" / "segstats_jsonld")]
-    if existing_pythonpath:
-        pythonpath_entries.append(existing_pythonpath)
-    env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
-    env.setdefault("RDFLIB_STORE_NO_BIND_OVERRIDE", "1")
-    env.setdefault("SEGSTATS_JSONLD_ALLOW_NEW_KEYS", "1")
-    env.pop("PYTHONHOME", None)
+            env = os.environ.copy()
+            project_root = Path(__file__).resolve().parents[1]
+            existing_pythonpath = env.get("PYTHONPATH")
+            pythonpath_entries = [str(project_root), str(project_root / "src"), str(project_root / "src" / "segstats_jsonld")]
+            if existing_pythonpath:
+                pythonpath_entries.append(existing_pythonpath)
+            env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
+            env.setdefault("RDFLIB_STORE_NO_BIND_OVERRIDE", "1")
+            env.setdefault("SEGSTATS_JSONLD_ALLOW_NEW_KEYS", "1")
+            env.pop("PYTHONHOME", None)
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    except BaseException:
-        if copied_nidm:
-            copied_nidm.unlink(missing_ok=True)
-        raise
+            result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
-    if result.returncode != 0:
-        logger.error(f"NIDM conversion failed for {fs_subject_id}")
-        logger.error(f"Error output: {result.stderr}")
-        if result.stdout:
-            logger.error(f"Command output: {result.stdout}")
-        if copied_nidm:
-            copied_nidm.unlink(missing_ok=True)
-            logger.error(f"No {final_nidm.name} written for {fs_subject_id}")
-        sys.exit(1)
-    if copied_nidm:
-        os.replace(copied_nidm, final_nidm)
-        copied_nidm = final_nidm
+            if result.returncode != 0:
+                logger.error(f"NIDM conversion failed for {fs_subject_id}")
+                logger.error(f"Error output: {result.stderr}")
+                if result.stdout:
+                    logger.error(f"Command output: {result.stdout}")
+                if copied_nidm:
+                    copied_nidm.unlink(missing_ok=True)
+                    logger.error(f"No {final_nidm.name} written for {fs_subject_id}")
+                sys.exit(1)
+            if copied_nidm:
+                os.replace(copied_nidm, final_nidm)
+                pending = None
+                copied_nidm = final_nidm
+        finally:
+            if pending is not None:
+                pending.unlink(missing_ok=True)
     # fs_to_nidm reports a run it completed with reduced provenance (stats left
     # unlinked to an acquisition, a new subject agent under --forcenidm) only on
     # stderr, so every stderr line of a successful run is logged as a warning.
@@ -504,6 +544,11 @@ def nidm_conversion(
             )
             continue
         if candidate == target_ttl:
+            continue
+        if candidate.name.startswith(TEMPORARY_PREFIX):
+            # another run's temporary copy, e.g. rewritten by a converter
+            # orphaned when that run was killed; never part of this output
+            logger.warning(f"Not merging temporary file {candidate.name} into nidm.ttl")
             continue
         if candidate.suffix.lower() in {".ttl", ".json", ".jsonld", ".json-ld"}:
             aggregation_sources.append(candidate)
