@@ -71,10 +71,13 @@ From: vnmd/freesurfer_8.0.0
 
     # The runscript starts the console script. Check that it exists and that,
     # with its directory first on sys.path and PYTHONPATH as %environment sets
-    # it (as at run time), the NIDM input check's import resolves to the
-    # installed converter module, not to something under the /opt/src checkout.
+    # it with no host value (as at run time), the NIDM input check's import
+    # resolves to the installed converter through the editable install: the
+    # module file and the real package's __init__.py, not a namespace package
+    # rooted at the checkout. Exit non-zero otherwise (sys.exit, not assert:
+    # python3 -O would drop an assert).
     command -v freesurfer-nidm
-    PYTHONPATH=/opt python3 -c "import os, shutil, sys; sys.path[0] = os.path.dirname(shutil.which('freesurfer-nidm')); from segstats_jsonld.fs_to_nidm import SubjectLookupError, find_subject; import segstats_jsonld.fs_to_nidm as m; assert m.__file__ == '/opt/src/segstats_jsonld/segstats_jsonld/fs_to_nidm.py', m.__file__; print('freesurfer-nidm resolves the converter lookup from', m.__file__)"
+    PYTHONPATH=/opt python3 -c "import os, shutil, sys; sys.path[0] = os.path.dirname(shutil.which('freesurfer-nidm')); from segstats_jsonld.fs_to_nidm import SubjectLookupError, find_subject; import segstats_jsonld as p, segstats_jsonld.fs_to_nidm as m; (m.__file__ != '/opt/src/segstats_jsonld/segstats_jsonld/fs_to_nidm.py' or p.__file__ != '/opt/src/segstats_jsonld/segstats_jsonld/__init__.py') and sys.exit('freesurfer-nidm would import the converter from %s (package %s)' % (m.__file__, p.__file__)); print('freesurfer-nidm resolves the converter lookup from', m.__file__)"
     PYTHONPATH=/opt freesurfer-nidm --version
 
     # Last step: everything this recipe put under /opt must be usable by
@@ -89,8 +92,10 @@ From: vnmd/freesurfer_8.0.0
 %environment
     # Set runtime license path to match BABS mount point
     export FS_LICENSE=/SGLR/FREESURFER_HOME/license.txt
-    # Add opt to Python path
-    export PYTHONPATH=/opt:$PYTHONPATH
+    # Add /opt to the Python path. No empty entry when the host sets no
+    # PYTHONPATH: Python reads an empty entry as the working directory, where a
+    # converter checkout would shadow the installed converter.
+    export PYTHONPATH=/opt${PYTHONPATH:+:$PYTHONPATH}
     # Add Python packages to path
     export PATH=/usr/local/bin:$PATH
 

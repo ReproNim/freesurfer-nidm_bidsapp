@@ -463,6 +463,30 @@ class TestNIDMAppendCommand:
         assert cmd is not None and "-n" in cmd, cmd
         return cmd
 
+    def test_logged_command_splits_back_into_the_exact_argv(self, tmp_path, caplog):
+        """The "Running command:" line is the argv shell-quoted (shlex.join), so
+        the -c bootstrap and paths with spaces, quotes and '#' survive a shlex
+        round trip. `' '.join` would log a line that splits differently."""
+        import shlex
+        from src.run import nidm_conversion
+        odd = tmp_path / "in put's \"dir\" #2"
+        odd.mkdir()
+        nidm_dir = odd / "NIDM"
+        nidm_dir.mkdir()
+        (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .")
+        wrapper = MagicMock()
+        wrapper.get_subject_t1_info.return_value = {
+            "T1w_images": [str(odd / "sub-001_T1w (copy).nii.gz")], "T2w_images": []}
+        with patch('src.run.subprocess.run') as mock_subprocess, caplog.at_level("INFO"):
+            mock_subprocess.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            nidm_conversion(odd / "out", "001", wrapper, nidm_input_dir=nidm_dir)
+        cmd = self._nidm_cmd(mock_subprocess)
+        assert cmd is not None and "-n" in cmd, cmd
+        logged = [r.getMessage().split("Running command: ", 1)[1] for r in caplog.records
+                  if "Running command: " in r.getMessage()]
+        assert len(logged) == 1, logged
+        assert shlex.split(logged[0]) == [str(a) for a in cmd]
+
     @pytest.mark.parametrize("t1_images, expected", [
         (["/bids/sub-001/ses-1/anat/sub-001_ses-1_run-1_T1w.nii.gz"], ["sub-001_ses-1_run-1_T1w.nii.gz"]),
         # recon-all averages repeated runs; all of them are named

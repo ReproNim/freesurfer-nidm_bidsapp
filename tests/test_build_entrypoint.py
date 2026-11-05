@@ -12,6 +12,8 @@ not resolve the way the console script runs it.
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = (ROOT / "Dockerfile").read_text()
 SINGULARITY = (ROOT / "Singularity").read_text()
@@ -91,3 +93,93 @@ def test_docker_build_checks_the_console_script_and_its_lookup_import():
              and instructions[i].endswith("&& freesurfer-nidm --version")]
     assert app_install and check, "the console-script check is missing from the Dockerfile"
     assert check[0] > app_install[-1]
+
+
+# --- Run-time sys.path and what the lookup check proves ---------------------
+
+PACKAGE_FILE = "'/opt/src/segstats_jsonld/segstats_jsonld/__init__.py'"
+
+
+def _pythonpath_after(assignment, host_value):
+    """PYTHONPATH after `assignment` runs in sh, from host_value (None = unset)."""
+    import subprocess
+    prelude = "unset PYTHONPATH" if host_value is None else f"export PYTHONPATH='{host_value}'"
+    out = subprocess.run(["sh", "-c", f'{prelude}; {assignment}; printf %s "$PYTHONPATH"'],
+                         capture_output=True, text=True, check=True)
+    return out.stdout
+
+
+@pytest.mark.parametrize("host_value", [None, "", "/host/lib"])
+def test_environment_pythonpath_never_adds_the_working_directory(host_value):
+    """Python reads an empty PYTHONPATH entry as the working directory. With
+    no host PYTHONPATH (a BABS job, --cleanenv), `/opt:$PYTHONPATH` is `/opt:`,
+    and a converter checkout in the working directory shadows the installed
+    converter."""
+    lines = [c for c in _singularity_section("environment") if "PYTHONPATH" in c]
+    assert lines == ["export PYTHONPATH=/opt${PYTHONPATH:+:$PYTHONPATH}"], lines
+    entries = _pythonpath_after(lines[0], host_value).split(":")
+    assert "" not in entries, entries
+    assert entries[0] == "/opt"
+    if host_value:
+        assert entries[1:] == [host_value]
+
+
+@pytest.mark.parametrize("assignment", [
+    "export PYTHONPATH=/opt:$PYTHONPATH", "export PYTHONPATH=$PYTHONPATH:/opt"])
+def test_pythonpath_check_rejects_a_trailing_empty_entry(assignment):
+    """Positive control: the old form leaves an empty entry with no host value."""
+    assert "" in _pythonpath_after(assignment, None).split(":")
+
+
+def test_dockerfile_pythonpath_is_only_opt():
+    """The base image sets no PYTHONPATH, so `/opt:$PYTHONPATH` would end in
+    an empty entry, the working directory."""
+    env = [c for c in _docker_instructions() if re.match(r"ENV\s+PYTHONPATH\b", c)]
+    assert env == ["ENV PYTHONPATH=/opt"], env
+
+
+def _shell_outside_quotes(line):
+    """The line with double-quoted strings removed: the shell part only."""
+    return re.sub(r'"(?:[^"\\]|\\.)*"', '""', line)
+
+
+def _swallows_status(shell):
+    """Anything that can hide the python command's exit status, or `-O`,
+    which drops asserts."""
+    return bool(re.search(r"\|\||;|&|\|", shell.replace("&&", ""))) or " -O" in shell
+
+
+def _singularity_check():
+    post = _singularity_section("post")
+    check = _lookup_checks(post)
+    assert len(check) == 1, check
+    return post[check[0]]
+
+
+def _docker_check():
+    instructions = _docker_instructions()
+    check = _lookup_checks(instructions)
+    assert len(check) == 1, check
+    return instructions[check[0]]
+
+
+def test_lookup_checks_name_the_real_package_not_a_namespace():
+    """With the checkout first on sys.path, fs_to_nidm still resolves to the
+    right file through the editable install while segstats_jsonld itself is a
+    namespace package. The check must also name the package's __init__.py,
+    and exit through sys.exit (python3 -O drops an assert)."""
+    for check in (_singularity_check(), _docker_check()):
+        assert f"m.__file__ != {CONVERTER_FILE}" in check, check
+        assert f"p.__file__ != {PACKAGE_FILE}" in check, check
+        assert "sys.exit(" in check and "assert " not in check, check
+
+
+@pytest.mark.parametrize("suffix", [
+    "", " || true", " || :", " || exit 0", "; true", " || echo skipped", " &", " | cat"])
+def test_lookup_check_can_fail_the_build(suffix):
+    """Nothing may swallow the python command's exit status (Singularity's
+    %post runs under `set -e`, Docker's RUN is one && chain). The suffixes are
+    mutants of the real lines; only "" passes."""
+    for check in (_singularity_check(), _docker_check()):
+        mutated = _shell_outside_quotes(check + suffix)
+        assert _swallows_status(mutated) == (suffix != ""), (suffix, mutated)

@@ -16,7 +16,9 @@ RUN apt-get update && apt-get install -y \
 # =======================================
 # Make license path match BABS mount point
 ENV FS_LICENSE=/SGLR/FREESURFER_HOME/license.txt
-ENV PYTHONPATH=/opt:$PYTHONPATH
+# Only /opt: the base image sets no PYTHONPATH, and `/opt:$PYTHONPATH` would
+# end in an empty entry, which Python reads as the working directory.
+ENV PYTHONPATH=/opt
 ENV PATH=/usr/local/bin:$PATH
 
 # =======================================
@@ -39,11 +41,13 @@ RUN python3 -m pip install --upgrade pip setuptools wheel && \
     python3 -m pip install -e .
 
 # The entrypoint is the console script. Fail the build if it is missing or if,
-# with its directory first on sys.path (as at run time), the NIDM input
-# check's import does not resolve to the installed converter module. The same
-# checks run in Singularity's %post.
+# with its directory first on sys.path and PYTHONPATH=/opt (as at run time),
+# the NIDM input check's import does not resolve to the installed converter
+# through the editable install (module file and the real package, not a
+# namespace package rooted at the checkout). The same checks run in
+# Singularity's %post.
 RUN command -v freesurfer-nidm && \
-    python3 -c "import os, shutil, sys; sys.path[0] = os.path.dirname(shutil.which('freesurfer-nidm')); from segstats_jsonld.fs_to_nidm import SubjectLookupError, find_subject; import segstats_jsonld.fs_to_nidm as m; assert m.__file__ == '/opt/src/segstats_jsonld/segstats_jsonld/fs_to_nidm.py', m.__file__; print('freesurfer-nidm resolves the converter lookup from', m.__file__)" && \
+    python3 -c "import os, shutil, sys; sys.path[0] = os.path.dirname(shutil.which('freesurfer-nidm')); from segstats_jsonld.fs_to_nidm import SubjectLookupError, find_subject; import segstats_jsonld as p, segstats_jsonld.fs_to_nidm as m; (m.__file__ != '/opt/src/segstats_jsonld/segstats_jsonld/fs_to_nidm.py' or p.__file__ != '/opt/src/segstats_jsonld/segstats_jsonld/__init__.py') and sys.exit('freesurfer-nidm would import the converter from %s (package %s)' % (m.__file__, p.__file__)); print('freesurfer-nidm resolves the converter lookup from', m.__file__)" && \
     freesurfer-nidm --version
 
 # Everything the app reads must be usable by a non-root --user, the same check
