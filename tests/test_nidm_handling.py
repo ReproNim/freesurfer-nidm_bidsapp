@@ -754,6 +754,13 @@ class TestNIDMTemporaryFile:
         subject_dir.mkdir(parents=True)
         stale = subject_dir / ".nidm.k1ll3d00.ttl"
         stale.write_text("@prefix : <http://example.org/> .\n:stale :x 1 .\n")
+        # An earlier run's outputs and another hidden file are not temporaries.
+        earlier_nidm = subject_dir / "nidm.ttl"
+        earlier_nidm.write_text("@prefix : <http://example.org/> .\n:earlier :x 1 .\n")
+        cde = subject_dir / "fs_cde.ttl"
+        cde.write_text("@prefix : <http://example.org/> .\n:cde :x 1 .\n")
+        notes = subject_dir / ".nidmnotes.ttl"
+        notes.write_text("@prefix : <http://example.org/> .\n:notes :x 1 .\n")
         convert = self._converting()
 
         def orphan_rewrites_its_temporary(cmd, *args, **kwargs):
@@ -768,6 +775,57 @@ class TestNIDMTemporaryFile:
         assert ":converted" in text
         assert "stale" not in text and "orphan" not in text
         assert not stale.exists()
+        assert earlier_nidm.exists() and cde.exists() and notes.exists()
+        assert ":cde" in cde.read_text() and ":notes" in notes.read_text()
+
+    def test_start_cleanup_removes_only_hidden_nidm_temporaries(self, tmp_path):
+        """The start-of-run cleanup deletes `.nidm.*.ttl` in the subject
+        directory and nothing else: never an earlier nidm.ttl, fs_cde.ttl,
+        other .ttl files, files in subdirectories, or a symlink's target."""
+        from src.run import _remove_interrupted_temporaries
+        subject_dir = tmp_path / "sub-001"
+        (subject_dir / "freesurfer").mkdir(parents=True)
+        outside = tmp_path / "outside.ttl"
+        outside.write_text("keep")
+        temporaries = [subject_dir / ".nidm.k1ll3d00.ttl", subject_dir / ".nidm.0rphan00.ttl"]
+        for path in temporaries:
+            path.write_text("temporary")
+        link = subject_dir / ".nidm.l1nk0000.ttl"
+        link.symlink_to(outside)
+        kept = [subject_dir / name for name in
+                ("nidm.ttl", "fs_cde.ttl", ".nidmnotes.ttl", "sub-001.ttl", "nidm.ttl.bak",
+                 ".nidm.ttl.keep")]
+        kept.append(subject_dir / "freesurfer" / ".nidm.nested00.ttl")
+        for path in kept:
+            path.write_text("keep")
+
+        _remove_interrupted_temporaries(subject_dir)
+
+        assert not any(p.exists() or p.is_symlink() for p in temporaries + [link])
+        assert all(p.read_text() == "keep" for p in kept + [outside])
+
+    @pytest.mark.parametrize("previous", ["default", "ignore", "function"])
+    def test_sigterm_handler_is_restored_after_conversion(self, previous):
+        """_exit_on_sigterm installs its handler only for the conversion and
+        puts back whatever was there before, also when the block raises."""
+        import signal
+        from src.run import _exit_on_sigterm
+
+        def custom(signum, frame):
+            pass
+
+        before = {"default": signal.SIG_DFL, "ignore": signal.SIG_IGN, "function": custom}[previous]
+        saved = signal.signal(signal.SIGTERM, before)
+        try:
+            with _exit_on_sigterm():
+                assert signal.getsignal(signal.SIGTERM) is not before
+            assert signal.getsignal(signal.SIGTERM) is before
+            with pytest.raises(RuntimeError):
+                with _exit_on_sigterm():
+                    raise RuntimeError("conversion failed")
+            assert signal.getsignal(signal.SIGTERM) is before
+        finally:
+            signal.signal(signal.SIGTERM, saved)
 
     def test_sigterm_during_conversion_leaves_no_temporary(self, tmp_path):
         """SIGTERM (a time limit, scancel) used to kill the app without any
