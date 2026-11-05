@@ -203,6 +203,82 @@ def find_nidm_input_file(nidm_input_dir, participant_label, session=None, warn=F
     return None
 
 
+CONVERTER_MODULE = "segstats_jsonld.fs_to_nidm"
+# The converter's checkout; nidm_conversion puts it on the converter's
+# PYTHONPATH, so it is found there when segstats_jsonld is not installed.
+CONVERTER_DIR = Path(__file__).resolve().parents[1] / "src" / "segstats_jsonld"
+
+
+def converter_subject_id(participant_label):
+    """The -subjid nidm_conversion passes to fs_to_nidm for a participant label."""
+    return f"sub-{participant_label}"
+
+
+def _import_fs_to_nidm():
+    import importlib
+
+    try:
+        return importlib.import_module(CONVERTER_MODULE)
+    except ModuleNotFoundError as err:
+        if err.name != "segstats_jsonld":
+            raise
+    sys.path.append(str(CONVERTER_DIR))
+    return importlib.import_module(CONVERTER_MODULE)
+
+
+def nidm_input_subject_problem(nidm_input_file, participant_label):
+    """Run fs_to_nidm's own subject lookup on the input NIDM.
+
+    nidm_conversion later converts a copy of this file with -subjid
+    converter_subject_id(participant_label) and --forcenidm, and fs_to_nidm
+    refuses it when the subject cannot be identified (the file has subjects
+    but not this one, or several nodes with its id and not exactly one owning
+    an anatomical MRI acquisition). Called before recon-all, so that costs
+    seconds rather than hours. The file is only parsed with rdflib; a file
+    rdflib cannot parse raises, as it would in fs_to_nidm.
+
+    Returns:
+        str or None: fs_to_nidm's message when it would refuse the input, None
+        when it would find (or, under --forcenidm, add) the subject.
+    """
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    from rdflib import util
+
+    fs_to_nidm = _import_fs_to_nidm()
+    path = str(nidm_input_file)
+    graph = Graph()
+    graph.parse(path, format=util.guess_format(path))
+    printed = StringIO()
+    try:
+        with redirect_stdout(printed):
+            # forceagent=True: nidm_conversion always passes --forcenidm with -n
+            fs_to_nidm.find_subject(graph, converter_subject_id(participant_label), forceagent=True)
+    except fs_to_nidm.SubjectLookupError as err:
+        return str(err)
+    finally:
+        for line in printed.getvalue().splitlines():
+            if line.strip():
+                logger.info(f"NIDM input check: {line.strip()}")
+    return None
+
+
+def check_nidm_input(nidm_input_dir, participant_label, session):
+    """The pre-recon-all NIDM input check: find the input (an unfetched annex
+    file raises) and exit 1 if fs_to_nidm could not find the subject in it."""
+    nidm_input_file = find_nidm_input_file(nidm_input_dir, participant_label, session, warn=True)
+    if nidm_input_file is None:
+        return
+    problem = nidm_input_subject_problem(nidm_input_file, participant_label)
+    if problem is None:
+        return
+    who = f"sub-{participant_label}" + (f" ses-{session}" if session else "")
+    logger.error(f"NIDM input {nidm_input_file} cannot take the FreeSurfer stats of {who}: {problem}")
+    logger.error(f"Not running recon-all for {who}: fix the NIDM input, or pass --skip-nidm")
+    sys.exit(1)
+
+
 def nidm_conversion(
     output_dir,
     participant_label,
@@ -254,7 +330,7 @@ def nidm_conversion(
     existing_nidm_file = find_nidm_input_file(nidm_input_dir, participant_label, bids_session)
 
     # Build the command
-    module_name = "segstats_jsonld.fs_to_nidm"
+    module_name = CONVERTER_MODULE
     
     copied_nidm = None
     final_nidm = Path(nidm_dir) / "nidm.ttl"
@@ -297,7 +373,7 @@ def nidm_conversion(
     # the subject then fails with fs_to_nidm's message in the log. Without an
     # input NIDM, each stats file gets its own new subject agent with ID
     # "sub-<id>" as given.
-    subjid_args = ["-subjid", f"sub-{participant_label}"]
+    subjid_args = ["-subjid", converter_subject_id(participant_label)]
     if copied_nidm:
         # NOTE: do NOT pass -j here. In fs_to_nidm's append branch the per-stats-file
         # loop accumulates by re-reading the -n file each iteration and writing back to
@@ -544,10 +620,12 @@ def process_participant(
 
     # Run participant analysis
     try:
-        # Look the NIDM input up before recon-all: an unfetched annex file is
-        # an error, and it should cost seconds, not hours of reconstruction.
+        # Look the NIDM input up before recon-all: an unfetched annex file, or
+        # one fs_to_nidm would refuse because it cannot find this subject in
+        # it, is an error, and it should cost seconds, not hours of
+        # reconstruction.
         if not skip_nidm:
-            find_nidm_input_file(nidm_input_dir, participant_label, detected_session, warn=True)
+            check_nidm_input(nidm_input_dir, participant_label, detected_session)
 
         if skip_freesurfer:
             # Validate that FreeSurfer outputs exist
@@ -676,10 +754,9 @@ def process_session(
 
     # Run session-level analysis
     try:
-        # Look the NIDM input up before recon-all: an unfetched annex file is
-        # an error, and it should cost seconds, not hours of reconstruction.
+        # Look the NIDM input up before recon-all (see process_participant).
         if not skip_nidm:
-            find_nidm_input_file(nidm_input_dir, participant_label, session_label, warn=True)
+            check_nidm_input(nidm_input_dir, participant_label, session_label)
 
         if skip_freesurfer:
             # Validate that session-specific FreeSurfer outputs exist.

@@ -428,6 +428,65 @@ class TestNIDMInputPreflight:
         assert result.exit_code == 1, result.output
         mock_wrapper.return_value.process_subject.assert_not_called()
 
+    @staticmethod
+    def _input_nidm(nidm_dir, subject_id, *parts):
+        """An input NIDM at nidm_dir/parts whose only subject has subject_id
+        (no subject at all for None)."""
+        text = (
+            "@prefix prov: <http://www.w3.org/ns/prov#> .\n"
+            "@prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/> .\n"
+            "@prefix nidm: <http://purl.org/nidash/nidm#> .\n"
+            "<http://iri.nidash.org/project> a nidm:Project, prov:Activity .\n"
+        )
+        if subject_id is not None:
+            text += ("<http://iri.nidash.org/person> a prov:Agent, prov:Person ;"
+                     f' ndar:src_subject_id "{subject_id}" .\n')
+        target = nidm_dir.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        return nidm_dir
+
+    def _invoke_converting(self, bids_dir, output_dir, level, *extra):
+        """As _invoke, with nidm_conversion replaced by a mock."""
+        with patch('src.run.nidm_conversion') as mock_conversion:
+            result, mock_wrapper = self._invoke(bids_dir, output_dir, level, *extra)
+        return result, mock_wrapper, mock_conversion
+
+    @pytest.mark.parametrize("level", ["participant", "session"])
+    def test_input_without_the_subject_fails_before_recon_all(
+            self, tmp_path, request, level):
+        """fs_to_nidm refuses an input NIDM that holds other subjects but not
+        this one; the app runs fs_to_nidm's own lookup on it before recon-all,
+        so the job fails in seconds, with fs_to_nidm's message."""
+        if level == "participant":
+            bids = request.getfixturevalue("bids_single_session")
+            parts, extra = ("sub-001", "nidm.ttl"), ()
+        else:
+            bids = request.getfixturevalue("bids_multi_session")
+            parts = ("sub-001", "ses-baseline", "nidm.ttl")
+            extra = ('--session-label', 'baseline')
+        nidm = self._input_nidm(tmp_path / "NIDM", "2", *parts)
+        result, mock_wrapper, mock_conversion = self._invoke_converting(
+            bids, tmp_path / "out", level, *extra, '--nidm-input-dir', str(nidm))
+        assert result.exit_code == 1, result.output
+        mock_wrapper.return_value.process_subject.assert_not_called()
+        mock_conversion.assert_not_called()
+        errors = [line for line in result.output.splitlines() if " - ERROR - " in line]
+        assert any("Subject ID sub-001 not found in the input NIDM, whose subject IDs are: 2"
+                   in e for e in errors), result.output
+
+    @pytest.mark.parametrize("subject_id", ["1", "sub-001", None])
+    def test_input_with_the_subject_proceeds_to_recon_all(
+            self, tmp_path, bids_single_session, subject_id):
+        """A matching id, in any spelling, and an input without subjects
+        (--forcenidm adds one) pass the check."""
+        nidm = self._input_nidm(tmp_path / "NIDM", subject_id, "sub-001", "nidm.ttl")
+        result, mock_wrapper, mock_conversion = self._invoke_converting(
+            bids_single_session, tmp_path / "out", 'participant', '--nidm-input-dir', str(nidm))
+        assert result.exit_code == 0, result.output
+        mock_wrapper.return_value.process_subject.assert_called_once()
+        mock_conversion.assert_called_once()
+
     def test_skip_nidm_skips_the_preflight(self, tmp_path, bids_single_session):
         nidm = self._unfetched(tmp_path / "NIDM", "sub-001", "nidm.ttl")
         result, mock_wrapper = self._invoke(
