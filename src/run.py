@@ -8,6 +8,7 @@ from a BIDS dataset and outputs both standard FreeSurfer results and NIDM format
 
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -203,7 +204,17 @@ def find_nidm_input_file(nidm_input_dir, participant_label, session=None, warn=F
     return None
 
 
+# fs_to_nidm is run in the app's own interpreter by calling its main(), not
+# with `python -m segstats_jsonld.fs_to_nidm`: the package __init__ imports
+# that module, so -m executed it twice and runpy warned (RuntimeWarning,
+# "found in sys.modules ...") on every run.
 CONVERTER_MODULE = "segstats_jsonld.fs_to_nidm"
+CONVERTER_BOOTSTRAP = (
+    "import sys; "
+    f"from {CONVERTER_MODULE} import main; "
+    "sys.argv[0] = 'fs_to_nidm'; "
+    "sys.exit(main())"
+)
 # The converter's checkout; nidm_conversion puts it on the converter's
 # PYTHONPATH, so it is found there when segstats_jsonld is not installed.
 CONVERTER_DIR = Path(__file__).resolve().parents[1] / "src" / "segstats_jsonld"
@@ -330,8 +341,8 @@ def nidm_conversion(
     existing_nidm_file = find_nidm_input_file(nidm_input_dir, participant_label, bids_session)
 
     # Build the command
-    module_name = CONVERTER_MODULE
-    
+    converter = [sys.executable, "-c", CONVERTER_BOOTSTRAP]
+
     copied_nidm = None
     final_nidm = Path(nidm_dir) / "nidm.ttl"
     if existing_nidm_file:
@@ -382,7 +393,7 @@ def nidm_conversion(
         # last-globbed one is silently discarded (135 vs 5188 measurements on ABIDE
         # sub-0051456, and nondeterministic because glob order is filesystem-dependent).
         # fs_to_nidm 17f82df and later refuse -j with -s and -n instead.
-        cmd = [sys.executable, "-m", module_name, "-s", subject_dir, *subjid_args, "-n", str(copied_nidm), "--forcenidm"]
+        cmd = [*converter, "-s", subject_dir, *subjid_args, "-n", str(copied_nidm), "--forcenidm"]
         # A subject can have several anatomical acquisitions in the input (other
         # sessions, acq- variants, repeated runs); name every T1w recon-all used so
         # the stats link to exactly those.
@@ -394,12 +405,12 @@ def nidm_conversion(
             logger.info(f"Found existing NIDM file: {existing_nidm_file}")
             logger.info(f"Adding data to existing NIDM file: {copied_nidm}")
     else:
-        cmd = [sys.executable, "-m", module_name, "-s", subject_dir, *subjid_args, "-o", str(nidm_dir), "-j"]
+        cmd = [*converter, "-s", subject_dir, *subjid_args, "-o", str(nidm_dir), "-j"]
         if nidm_input_dir and verbose:
             logger.info(f"No NIDM file found in {nidm_input_dir}; creating new output")
 
     # Log the command for debugging and replay purposes
-    logger.info(f"Running command: {' '.join(cmd)}")
+    logger.info(f"Running command: {shlex.join(cmd)}")
 
     # Snapshot by modification time, not just name: a re-run (e.g. regenerating
     # NIDM with --skip-freesurfer) rewrites the converter's files under the same

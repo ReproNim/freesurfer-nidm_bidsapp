@@ -15,7 +15,7 @@ import pytest
 from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.namespace import XSD
 
-from src.run import nidm_conversion
+from src.run import CONVERTER_BOOTSTRAP, CONVERTER_MODULE, nidm_conversion
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ASEG_STATS = REPO_ROOT / "src" / "segstats_jsonld" / "segstats_jsonld" / "tests" / "testdata" / "aseg.stats"
@@ -102,6 +102,34 @@ def test_measures_attach_to_the_input_subject_and_the_t1w_used(tmp_path):
     assert ACQ_RUN1 in used and ACQ_HIRES not in used, used
 
 
+@pytest.mark.parametrize("with_input_nidm", [True, False])
+def test_successful_conversion_logs_no_runtime_warning(tmp_path, with_input_nidm):
+    """Run as `python -m segstats_jsonld.fs_to_nidm`, runpy warned on every
+    conversion that the module was already in sys.modules (the package
+    __init__ imports it), and the app relayed that as two WARNING lines in
+    every subject's log."""
+    import logging
+
+    nidm_input_dir = None
+    if with_input_nidm:
+        nidm_input_dir = tmp_path / "NIDM"
+        (nidm_input_dir / "sub-001").mkdir(parents=True)
+        (nidm_input_dir / "sub-001" / "nidm.ttl").write_text(INPUT_TTL)
+    out = tmp_path / "out"
+    recon_all_tree(out)
+    records = []
+    handler = logging.Handler(level=logging.WARNING)
+    handler.emit = records.append
+    app_logger = logging.getLogger("freesurfer-nidm")
+    app_logger.addHandler(handler)
+    try:
+        convert(out, nidm_input_dir=nidm_input_dir)
+    finally:
+        app_logger.removeHandler(handler)
+    warnings = [r.getMessage() for r in records]
+    assert [w for w in warnings if "RuntimeWarning" in w or "sys.modules" in w] == [], warnings
+
+
 def test_without_input_nidm_the_subject_is_not_named_freesurfer(tmp_path):
     out = tmp_path / "out"
     recon_all_tree(out)
@@ -161,8 +189,8 @@ def _parse_with_checked_out_converter(tmp_path, with_input_nidm):
         run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         nidm_conversion(str(out), "001", wrapper,
                         nidm_input_dir=str(nidm_input_dir) if nidm_input_dir else None)
-    cmd = next(c.args[0] for c in run.call_args_list if "segstats_jsonld.fs_to_nidm" in c.args[0])
-    assert cmd[1:3] == ["-m", "segstats_jsonld.fs_to_nidm"], cmd
+    cmd = next(c.args[0] for c in run.call_args_list if CONVERTER_BOOTSTRAP in c.args[0])
+    assert cmd[:3] == [sys.executable, "-c", CONVERTER_BOOTSTRAP], cmd
 
     saved_path = list(sys.path)
     saved = {n: m for n, m in sys.modules.items()
@@ -171,7 +199,7 @@ def _parse_with_checked_out_converter(tmp_path, with_input_nidm):
         del sys.modules[n]
     sys.path.insert(0, str(SUBMODULE))
     try:
-        converter = importlib.import_module(cmd[2])
+        converter = importlib.import_module(CONVERTER_MODULE)
         assert Path(converter.__file__).resolve().is_relative_to(SUBMODULE.resolve()), converter.__file__
         parsed = {}
         with patch.object(converter, "_convert", lambda args: parsed.setdefault("args", args)), \

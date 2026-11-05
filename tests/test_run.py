@@ -20,7 +20,7 @@ import logging
 import subprocess
 
 from click.testing import CliRunner
-from src.run import cli
+from src.run import CONVERTER_BOOTSTRAP, cli
 
 
 @pytest.fixture
@@ -198,8 +198,8 @@ def test_basic_run(mock_subprocess_run, mock_wrapper_class, mock_layout, bids_da
     mock_subprocess_run.assert_called_once()
     call_args = mock_subprocess_run.call_args[0][0]
     assert 'python' in call_args[0]  # Python executable (may be full path or 'python3')
-    assert '-m' in call_args
-    assert 'segstats_jsonld.fs_to_nidm' in call_args
+    assert call_args[1:3] == ['-c', CONVERTER_BOOTSTRAP]
+    assert 'from segstats_jsonld.fs_to_nidm import main' in CONVERTER_BOOTSTRAP
     assert '-s' in call_args
     assert '-o' in call_args or '-n' in call_args  # Either new output or existing NIDM
     assert '-j' in call_args
