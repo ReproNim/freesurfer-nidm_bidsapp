@@ -38,6 +38,14 @@ RUN python3 -m pip install --upgrade pip setuptools wheel && \
     python3 -m pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8' && \
     python3 -m pip install -e .
 
+# The entrypoint is the console script. Fail the build if it is missing or if,
+# with its directory first on sys.path (as at run time), the NIDM input
+# check's import does not resolve to the installed converter module. The same
+# checks run in Singularity's %post.
+RUN command -v freesurfer-nidm && \
+    python3 -c "import os, shutil, sys; sys.path[0] = os.path.dirname(shutil.which('freesurfer-nidm')); from segstats_jsonld.fs_to_nidm import SubjectLookupError, find_subject; import segstats_jsonld.fs_to_nidm as m; assert m.__file__ == '/opt/src/segstats_jsonld/segstats_jsonld/fs_to_nidm.py', m.__file__; print('freesurfer-nidm resolves the converter lookup from', m.__file__)" && \
+    freesurfer-nidm --version
+
 # Everything the app reads must be usable by a non-root --user, the same check
 # Singularity runs at the end of %post.
 RUN unreadable="$(find /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=rx \))" && \
@@ -50,8 +58,10 @@ RUN unreadable="$(find /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.c
 # =======================================
 # Runtime Configuration
 # =======================================
-# Entrypoint that expects input/output paths as arguments
-ENTRYPOINT ["python3", "/opt/src/run.py"]
+# Entrypoint that expects input/output paths as arguments: the console script,
+# not `python3 /opt/src/run.py` (which puts /opt/src first on sys.path, where
+# the converter checkout shadows the installed package).
+ENTRYPOINT ["freesurfer-nidm"]
 
 # The commit this image was built from (docker build --build-arg
 # GIT_COMMIT=$(git rev-parse HEAD) ...). Declared last so that a new commit

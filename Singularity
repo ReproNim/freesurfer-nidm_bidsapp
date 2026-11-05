@@ -69,6 +69,14 @@ From: vnmd/freesurfer_8.0.0
     python3 -m pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8'
     python3 -m pip install -e .
 
+    # The runscript starts the console script. Check that it exists and that,
+    # with its directory first on sys.path and PYTHONPATH as %environment sets
+    # it (as at run time), the NIDM input check's import resolves to the
+    # installed converter module, not to something under the /opt/src checkout.
+    command -v freesurfer-nidm
+    PYTHONPATH=/opt python3 -c "import os, shutil, sys; sys.path[0] = os.path.dirname(shutil.which('freesurfer-nidm')); from segstats_jsonld.fs_to_nidm import SubjectLookupError, find_subject; import segstats_jsonld.fs_to_nidm as m; assert m.__file__ == '/opt/src/segstats_jsonld/segstats_jsonld/fs_to_nidm.py', m.__file__; print('freesurfer-nidm resolves the converter lookup from', m.__file__)"
+    PYTHONPATH=/opt freesurfer-nidm --version
+
     # Last step: everything this recipe put under /opt must be usable by
     # whoever runs the image, not only by the account that built it.
     unreadable="$(find /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=rx \))"
@@ -87,8 +95,13 @@ From: vnmd/freesurfer_8.0.0
     export PATH=/usr/local/bin:$PATH
 
 %runscript
-    # Execute the Python entry point directly
-    python3 /opt/src/run.py "$@"
+    # Start the app through its console script, as the Dockerfile's entrypoint
+    # does. Not `python3 /opt/src/run.py`: that puts /opt/src first on
+    # sys.path, so the converter checkout /opt/src/segstats_jsonld (no
+    # __init__.py) shadows the installed package as a namespace package, and
+    # any converter submodule named like an entry of that checkout (tests,
+    # examples, segstats_jsonld) would load the wrong file.
+    exec freesurfer-nidm "$@"
 
 %help
     FreeSurfer BIDS App with NIDM Output
