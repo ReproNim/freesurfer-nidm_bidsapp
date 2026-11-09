@@ -452,22 +452,40 @@ class TestNIDMInputPreflight:
             result, mock_wrapper = self._invoke(bids_dir, output_dir, level, *extra)
         return result, mock_wrapper, mock_conversion
 
-    @pytest.mark.parametrize("level", ["participant", "session"])
+    @staticmethod
+    def _one_session(tmp_path):
+        """A BIDS dataset whose subject has a single session, ses-baseline."""
+        bids = tmp_path / "bids-one-session"
+        anat = bids / "sub-001" / "ses-baseline" / "anat"
+        anat.mkdir(parents=True)
+        (bids / "dataset_description.json").write_text(
+            json.dumps({"Name": "x", "BIDSVersion": "1.8.0", "DatasetType": "raw"}))
+        (anat / "sub-001_ses-baseline_T1w.nii.gz").touch()
+        return bids
+
+    @pytest.mark.parametrize("level", [
+        "participant", "session", "participant-with-session-label", "participant-detected-session"])
     def test_input_without_the_subject_fails_before_recon_all(
             self, tmp_path, request, level):
         """fs_to_nidm refuses an input NIDM that holds other subjects but not
         this one; the app runs fs_to_nidm's own lookup on it before recon-all,
-        so the job fails in seconds, with fs_to_nidm's message."""
+        so the job fails in seconds, with fs_to_nidm's message. BABS runs
+        session-wise jobs as `participant --session-label X`, and the
+        participant level also detects a single session; the session-level
+        input (sub-<id>/ses-<x>/nidm.ttl) must be the one checked."""
+        cli_level, extra = level.split("-", 1)[0], ()
+        parts = ("sub-001", "ses-baseline", "nidm.ttl")
         if level == "participant":
             bids = request.getfixturevalue("bids_single_session")
-            parts, extra = ("sub-001", "nidm.ttl"), ()
+            parts = ("sub-001", "nidm.ttl")
+        elif level == "participant-detected-session":
+            bids = self._one_session(tmp_path)
         else:
             bids = request.getfixturevalue("bids_multi_session")
-            parts = ("sub-001", "ses-baseline", "nidm.ttl")
             extra = ('--session-label', 'baseline')
         nidm = self._input_nidm(tmp_path / "NIDM", "2", *parts)
         result, mock_wrapper, mock_conversion = self._invoke_converting(
-            bids, tmp_path / "out", level, *extra, '--nidm-input-dir', str(nidm))
+            bids, tmp_path / "out", cli_level, *extra, '--nidm-input-dir', str(nidm))
         assert result.exit_code == 1, result.output
         mock_wrapper.return_value.process_subject.assert_not_called()
         mock_conversion.assert_not_called()
@@ -536,6 +554,36 @@ class TestNIDMInputPreflight:
         mock_conversion.assert_not_called()
         errors = [line for line in result.output.splitlines() if " - ERROR - " in line]
         assert any(str(target) in e and "no nidm:Project" in e for e in errors), errors
+
+    def test_lookup_messages_are_logged_not_printed(self, tmp_path, capsys, caplog):
+        """fs_to_nidm's find_subject prints which node it chose (with several
+        matching nodes, the one that owns an anatomical MRI acquisition). The
+        check captures that stdout and logs each line as "NIDM input check:"."""
+        import logging
+        from src.run import nidm_input_subject_problem
+
+        owner, other = "http://iri.nidash.org/owner", "http://iri.nidash.org/other"
+        target = tmp_path / "nidm.ttl"
+        target.write_text(
+            "@prefix prov: <http://www.w3.org/ns/prov#> .\n"
+            "@prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/> .\n"
+            "@prefix nidm: <http://purl.org/nidash/nidm#> .\n"
+            "<http://iri.nidash.org/project> a nidm:Project, prov:Activity .\n"
+            f'<{owner}> a prov:Agent, prov:Person ; ndar:src_subject_id "1" .\n'
+            f'<{other}> a prov:Agent, prov:Person ; ndar:src_subject_id "1" .\n'
+            "<http://iri.nidash.org/acq> a nidm:AcquisitionObject, prov:Entity ;\n"
+            "  nidm:hadAcquisitionModality nidm:MagneticResonanceImaging ;\n"
+            "  nidm:hadImageUsageType nidm:Anatomical ;\n"
+            "  prov:wasGeneratedBy <http://iri.nidash.org/act> .\n"
+            "<http://iri.nidash.org/act> a prov:Activity ;\n"
+            f"  prov:qualifiedAssociation [ a prov:Association ; prov:agent <{owner}> ] .\n")
+        capsys.readouterr()
+        with caplog.at_level(logging.INFO, logger="freesurfer-nidm"):
+            assert nidm_input_subject_problem(target, "001") is None
+        assert capsys.readouterr().out == ""
+        logged = [r.getMessage() for r in caplog.records if r.getMessage().startswith("NIDM input check: ")]
+        assert len(logged) == 1, logged
+        assert "matches 2 subject agents" in logged[0] and f"using {owner}" in logged[0], logged
 
     def test_skip_nidm_skips_the_preflight(self, tmp_path, bids_single_session):
         nidm = self._unfetched(tmp_path / "NIDM", "sub-001", "nidm.ttl")

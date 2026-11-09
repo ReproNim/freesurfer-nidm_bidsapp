@@ -734,21 +734,23 @@ class TestNIDMTemporaryFile:
             return MagicMock(returncode=0, stdout="", stderr="")
         return convert
 
+    @pytest.mark.parametrize("umask, expected", [(0o022, 0o644), (0o002, 0o664), (0o077, 0o600)])
     @pytest.mark.parametrize("input_mode", [0o444, 0o600])
-    def test_nidm_ttl_gets_the_mode_of_a_new_file(self, tmp_path, input_mode):
+    def test_nidm_ttl_gets_the_mode_of_a_new_file(self, tmp_path, input_mode, umask, expected):
         """mkstemp creates the temporary file 0600; the result must get the mode
-        a new file gets under the umask, not 0600 and not the input's (a
-        git-annex input is read-only)."""
+        a new file gets under the umask (group-shared datalad datasets use
+        002), not 0600, not a fixed 0644 and not the input's (a git-annex
+        input is read-only)."""
         import os
         from src.run import nidm_conversion
         nidm_dir = self._input_dir(tmp_path, mode=input_mode)
-        old_umask = os.umask(0o022)
+        old_umask = os.umask(umask)
         try:
             with patch('src.run.subprocess.run', side_effect=self._converting()):
                 nidm_conversion(tmp_path / "out", "001", self._wrapper(), nidm_input_dir=nidm_dir)
         finally:
             os.umask(old_umask)
-        assert (tmp_path / "out" / "sub-001" / "nidm.ttl").stat().st_mode & 0o777 == 0o644
+        assert (tmp_path / "out" / "sub-001" / "nidm.ttl").stat().st_mode & 0o777 == expected
 
     def test_nidm_ttl_is_the_converted_file_renamed_not_a_copy(self, tmp_path):
         """os.replace, not a copy: the converted file itself becomes nidm.ttl,
@@ -962,7 +964,8 @@ class TestNIDMWithoutInputFailsClosed:
         errors = self._convert(tmp_path, caplog, files)
         assert any(cause in m for m in errors), errors
 
-    def test_nidm_ttl_is_written_through_a_temporary_file(self, tmp_path):
+    @pytest.mark.parametrize("umask, expected", [(0o022, 0o644), (0o002, 0o664), (0o077, 0o600)])
+    def test_nidm_ttl_is_written_through_a_temporary_file(self, tmp_path, umask, expected):
         """The merged graph is serialized to a temporary file in the subject
         directory and renamed to nidm.ttl, never written to nidm.ttl in place."""
         import os
@@ -975,7 +978,7 @@ class TestNIDMWithoutInputFailsClosed:
             seen.append(Path(destination))
             return real(self_graph, destination=destination, **kwargs)
 
-        old_umask = os.umask(0o022)
+        old_umask = os.umask(umask)
         try:
             with patch('src.run.subprocess.run',
                        side_effect=self._writing({"aseg_nidm.jsonld": self.JSONLD % ("aseg", "1")})), \
@@ -988,7 +991,7 @@ class TestNIDMWithoutInputFailsClosed:
         assert seen[0].name.startswith(".nidm.") and not seen[0].exists()
         nidm_ttl = subject_dir / "nidm.ttl"
         assert ":aseg" in nidm_ttl.read_text()
-        assert nidm_ttl.stat().st_mode & 0o777 == 0o644
+        assert nidm_ttl.stat().st_mode & 0o777 == expected
 
 
 
