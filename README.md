@@ -241,6 +241,7 @@ The app writes everything for a subject under that subject's own directory, dire
 - The NIDM output is always named `nidm.ttl`, one per subject (or per session for multi-session data). When an input NIDM document is found (see `--nidm-input-dir`), `nidm.ttl` contains that graph plus this run's measures — the input graph is preserved inside the output, never written to a separate file.
 - `fs_cde.ttl` holds the shared FreeSurfer common-data-element vocabulary. It is identical across subjects and deliberately kept out of `nidm.ttl`.
 - When no input NIDM document is found, the converter also leaves one intermediate `<stats-name>_nidm.jsonld` file per supported stats file (e.g. `aseg_nidm.jsonld`) in the subject directory; their content is merged into `nidm.ttl`.
+- If the conversion fails (the converter exits non-zero, one of its outputs cannot be parsed, or `nidm.ttl` cannot be written), the job exits 1 and writes no `nidm.ttl`. A `nidm.ttl` from an earlier run is left in place; the log names it and says it is not from this run.
 - In BABS workflows each job zips only `sub-<id>/`, so `dataset_description.json` and `README` belong to the enclosing derivative dataset rather than the zip.
 
 ### FreeSurfer Output

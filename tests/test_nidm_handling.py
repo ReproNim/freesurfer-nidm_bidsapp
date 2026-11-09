@@ -983,3 +983,79 @@ class TestNIDMWithoutInputFailsClosed:
         assert ":aseg" in nidm_ttl.read_text()
         assert nidm_ttl.stat().st_mode & 0o777 == 0o644
 
+
+
+class TestFailedRerunKeepsTheEarlierNIDM:
+    """A failed re-conversion (e.g. --skip-freesurfer) leaves an earlier
+    run's nidm.ttl in place; the log must say that it is not this run's."""
+
+    EARLIER = "@prefix : <http://example.org/> .\n:EARLIER_RUN :x 1 .\n"
+
+    @pytest.mark.parametrize("with_input_nidm", [True, False])
+    def test_the_log_says_the_earlier_nidm_ttl_is_not_from_this_run(self, tmp_path, caplog,
+                                                                    with_input_nidm):
+        from src.run import nidm_conversion
+        nidm_dir = None
+        if with_input_nidm:
+            nidm_dir = tmp_path / "NIDM"
+            nidm_dir.mkdir()
+            (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .\n:input :x 1 .\n")
+        subject_dir = tmp_path / "out" / "sub-001"
+        subject_dir.mkdir(parents=True)
+        (subject_dir / "nidm.ttl").write_text(self.EARLIER)
+        wrapper = MagicMock()
+        wrapper.get_subject_t1_info.return_value = {"T1w_images": [], "T2w_images": []}
+        with patch('src.run.subprocess.run',
+                   return_value=MagicMock(returncode=1, stdout="", stderr="fs_to_nidm.py: error: boom")), \
+             caplog.at_level("INFO"), pytest.raises(SystemExit) as exc:
+            nidm_conversion(tmp_path / "out", "001", wrapper, nidm_input_dir=nidm_dir)
+        assert exc.value.code == 1
+        assert (subject_dir / "nidm.ttl").read_text() == self.EARLIER
+        errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+        assert not any(m.startswith("No nidm.ttl written") for m in errors), errors
+        assert any("earlier run" in m and "not from this run" in m and str(subject_dir / "nidm.ttl") in m
+                   for m in errors), errors
+
+    def test_without_an_earlier_nidm_ttl_the_log_says_none_was_written(self, tmp_path, caplog):
+        from src.run import nidm_conversion
+        nidm_dir = tmp_path / "NIDM"
+        nidm_dir.mkdir()
+        (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .\n:input :x 1 .\n")
+        wrapper = MagicMock()
+        wrapper.get_subject_t1_info.return_value = {"T1w_images": [], "T2w_images": []}
+        with patch('src.run.subprocess.run',
+                   return_value=MagicMock(returncode=1, stdout="", stderr="boom")), \
+             caplog.at_level("INFO"), pytest.raises(SystemExit):
+            nidm_conversion(tmp_path / "out", "001", wrapper, nidm_input_dir=nidm_dir)
+        errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+        assert any(m.startswith("No nidm.ttl written for sub-001") for m in errors), errors
+        assert not any("earlier run" in m for m in errors), errors
+
+    def test_a_merge_failure_after_the_rename_leaves_no_nidm_ttl(self, tmp_path, caplog):
+        """With an input NIDM the converted copy is renamed to nidm.ttl before
+        any other converter output is merged into it; if that merge fails, the
+        renamed file is this run's unfinished output, so it is removed and the
+        log does not call it an earlier run's."""
+        from src.run import nidm_conversion
+        nidm_dir = tmp_path / "NIDM"
+        nidm_dir.mkdir()
+        (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .\n:input :x 1 .\n")
+        wrapper = MagicMock()
+        wrapper.get_subject_t1_info.return_value = {"T1w_images": [], "T2w_images": []}
+
+        def convert(cmd, *args, **kwargs):
+            target = Path(cmd[cmd.index("-n") + 1])
+            with open(target, "a") as f:
+                f.write(":converted :x 1 .\n")
+            (target.parent / "extra_nidm.jsonld").write_text("{ not json")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch('src.run.subprocess.run', side_effect=convert), caplog.at_level("INFO"), \
+             pytest.raises(SystemExit) as exc:
+            nidm_conversion(tmp_path / "out", "001", wrapper, nidm_input_dir=nidm_dir)
+        assert exc.value.code == 1
+        assert not (tmp_path / "out" / "sub-001" / "nidm.ttl").exists()
+        errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+        assert any("extra_nidm.jsonld" in m for m in errors), errors
+        assert any(m == "No nidm.ttl written for sub-001" for m in errors), errors
+        assert not any("earlier run" in m for m in errors), errors

@@ -385,6 +385,24 @@ def _exit_on_sigterm():
         signal.signal(signal.SIGTERM, previous)
 
 
+def _log_no_nidm_written(final_nidm, fs_subject_id):
+    """Say that this run wrote no nidm.ttl and, if one is there, that it is
+    an earlier run's (a failed re-conversion with --skip-freesurfer leaves it
+    in place)."""
+    final_nidm = Path(final_nidm)
+    if final_nidm.exists():
+        import datetime
+
+        mtime = datetime.datetime.fromtimestamp(final_nidm.stat().st_mtime).isoformat(timespec="seconds")
+        logger.error(
+            f"{final_nidm} (modified {mtime}) is left from an earlier run: it is not from this run "
+            f"and does not hold this run's FreeSurfer measures; no {final_nidm.name} was written "
+            f"for {fs_subject_id}"
+        )
+    else:
+        logger.error(f"No {final_nidm.name} written for {fs_subject_id}")
+
+
 def nidm_conversion(
     output_dir,
     participant_label,
@@ -452,8 +470,9 @@ def nidm_conversion(
                 # fs_to_nidm adds the stats to its -n file in place. Give it a temporary
                 # copy of the input next to nidm.ttl (it writes fs_cde.ttl beside its -n
                 # file) and rename the copy to nidm.ttl only after a successful run: a
-                # failed conversion then leaves no nidm.ttl, rather than an unmodified
-                # or half-written copy of the input that looks like a finished output.
+                # failed conversion then leaves no nidm.ttl of its own, rather than an
+                # unmodified or half-written copy of the input that looks like a finished
+                # output. An earlier run's nidm.ttl stays (the failure log says so).
                 # The input itself is never written, even when it is this nidm.ttl.
                 fd, tmp_name = tempfile.mkstemp(prefix=TEMPORARY_PREFIX, suffix=".ttl", dir=nidm_dir)
                 os.close(fd)
@@ -549,7 +568,7 @@ def nidm_conversion(
                     logger.error(f"Command output: {result.stdout}")
                 if copied_nidm:
                     copied_nidm.unlink(missing_ok=True)
-                    logger.error(f"No {final_nidm.name} written for {fs_subject_id}")
+                _log_no_nidm_written(final_nidm, fs_subject_id)
                 sys.exit(1)
             if copied_nidm:
                 os.replace(copied_nidm, final_nidm)
@@ -585,7 +604,10 @@ def nidm_conversion(
     # exit 0 without it is counted as done by a scheduler such as BABS.
     def _fail(reason):
         logger.error(f"NIDM conversion failed for {fs_subject_id}: {reason}")
-        logger.error(f"No {target_ttl.name} written for {fs_subject_id}")
+        if copied_nidm == target_ttl:
+            # this run's converted copy, already renamed: not a finished output
+            target_ttl.unlink(missing_ok=True)
+        _log_no_nidm_written(target_ttl, fs_subject_id)
         sys.exit(1)
 
     # The product is always <subject_dir>/nidm.ttl.
