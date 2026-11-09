@@ -946,9 +946,14 @@ class TestNIDMWithoutInputFailsClosed:
                                                   "wmparc_nidm.jsonld": "{ not json"})
         assert any("wmparc_nidm.jsonld" in m for m in errors), errors
 
-    def test_no_converter_output_fails_the_subject(self, tmp_path, caplog):
-        errors = self._convert(tmp_path, caplog, {})
-        assert errors
+    @pytest.mark.parametrize("files, cause", [
+        ({}, "wrote no new output"),
+        ({"fs_cde.ttl": "@prefix : <http://example.org/> .\n:cde :x 1 .\n"}, "no NIDM output"),
+        ({"aseg_nidm.jsonld": "{}"}, "hold no triples"),
+    ], ids=["nothing", "only-cde", "empty-graph"])
+    def test_no_converter_output_fails_the_subject(self, tmp_path, caplog, files, cause):
+        errors = self._convert(tmp_path, caplog, files)
+        assert any(cause in m for m in errors), errors
 
     def test_nidm_ttl_is_written_through_a_temporary_file(self, tmp_path):
         """The merged graph is serialized to a temporary file in the subject
