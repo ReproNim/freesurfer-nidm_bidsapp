@@ -258,6 +258,9 @@ def find_nidm_input_file(nidm_input_dir, participant_label, session=None, warn=F
 # PYTHONPATH's directories) are not filtered.
 CONVERTER_MODULE = "segstats_jsonld.fs_to_nidm"
 CONVERTER_FILE_ENV = "FREESURFER_NIDM_CONVERTER_FILE"
+# The bootstrap's one stdout line naming the converter file and the PyNIDM
+# version and file the conversion imported; nidm_conversion logs it.
+CONVERTER_REPORT = "freesurfer-nidm conversion uses:"
 CONVERTER_BOOTSTRAP = f"""\
 import os, sys
 try:
@@ -284,6 +287,9 @@ got = sys.modules["{CONVERTER_MODULE}"].__file__
 if os.path.realpath(got) != os.path.realpath(want):
     sys.exit("fs_to_nidm: the conversion would run %s, not %s, which the NIDM input check "
              "ran" % (got, want))
+nidm = sys.modules.get("nidm")
+print("{CONVERTER_REPORT} fs_to_nidm %s; PyNIDM %s from %s" % (
+    got, getattr(nidm, "__version__", "?"), os.path.realpath(getattr(nidm, "__file__", None) or "?")), flush=True)
 sys.argv[0] = "fs_to_nidm"
 sys.exit(main())
 """
@@ -612,6 +618,9 @@ def nidm_conversion(
             env.pop("PYTHONHOME", None)
 
             result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            for line in result.stdout.splitlines():
+                if line.startswith(CONVERTER_REPORT):
+                    logger.info(f"NIDM conversion uses{line[len(CONVERTER_REPORT):]}")
 
             if result.returncode != 0:
                 logger.error(f"NIDM conversion failed for {fs_subject_id}")

@@ -264,3 +264,41 @@ def test_each_converter_warning_is_logged_once(tmp_path):
     assert any("which has no subjects" in m for m in relayed), relayed
     assert not any("warnings.warn(" in m or "{subjid}" in m or "{want}" in m for m in relayed), relayed
     assert len(relayed) == len(set(relayed)), relayed
+
+
+@pytest.mark.parametrize("with_input_nidm", [True, False])
+def test_conversion_logs_the_pynidm_it_loaded(tmp_path, with_input_nidm):
+    """The converter switches to PyNIDM 4.x conventions without a word when
+    nidm.linkml is absent, so a PyNIDM from a host PYTHONPATH would go
+    unnoticed. The log names, once per run, the converter file and the
+    PyNIDM version and file the conversion imported."""
+    import logging
+    import os
+
+    import nidm
+
+    nidm_input_dir = None
+    if with_input_nidm:
+        nidm_input_dir = tmp_path / "NIDM"
+        (nidm_input_dir / "sub-001").mkdir(parents=True)
+        (nidm_input_dir / "sub-001" / "nidm.ttl").write_text(INPUT_TTL)
+    out = tmp_path / "out"
+    recon_all_tree(out)
+    records = []
+    handler = logging.Handler(level=logging.INFO)
+    handler.emit = records.append
+    app_logger = logging.getLogger("freesurfer-nidm")
+    app_logger.addHandler(handler)
+    old_level = app_logger.level
+    app_logger.setLevel(logging.INFO)
+    try:
+        convert(out, nidm_input_dir=nidm_input_dir)
+    finally:
+        app_logger.removeHandler(handler)
+        app_logger.setLevel(old_level)
+    found = [r for r in records if r.getMessage().startswith("NIDM conversion uses")]
+    lines = [r.getMessage() for r in found]
+    assert len(lines) == 1, lines
+    assert found[0].levelno == logging.INFO, lines
+    assert f"PyNIDM {nidm.__version__} from {os.path.realpath(nidm.__file__)}" in lines[0], lines
+    assert "fs_to_nidm.py" in lines[0], lines
