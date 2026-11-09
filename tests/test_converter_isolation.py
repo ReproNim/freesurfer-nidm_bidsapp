@@ -95,10 +95,13 @@ def test_conversion_ignores_a_converter_package_in_the_working_directory(
     assert stats_subject_agents(g), "nidm.ttl has no FreeSurfer stats activity"
 
 
-def test_conversion_ignores_a_module_named_like_a_converter_import(tmp_path, monkeypatch):
+@pytest.mark.parametrize("host_pythonpath", [None, "cwd", "."])
+def test_conversion_ignores_a_module_named_like_a_converter_import(tmp_path, monkeypatch, host_pythonpath):
     """fs_to_nidm imports glob; a glob.py in the working directory replaced
     the standard library's in the conversion, and the subject failed with
-    "no supported stats file" although the stats were there."""
+    "no supported stats file" although the stats were there. Also when the
+    host PYTHONPATH names the working directory, absolute or as ".", which
+    is not an empty entry and must still be dropped."""
     cwd = tmp_path / "cwd"
     cwd.mkdir()
     marker = tmp_path / "decoy-glob-imported"
@@ -110,6 +113,10 @@ def test_conversion_ignores_a_module_named_like_a_converter_import(tmp_path, mon
 
     out = tmp_path / "out"
     recon_all_tree(out)
+    if host_pythonpath is None:
+        monkeypatch.delenv("PYTHONPATH", raising=False)
+    else:
+        monkeypatch.setenv("PYTHONPATH", str(cwd) if host_pythonpath == "cwd" else host_pythonpath)
     monkeypatch.chdir(cwd)
     g = convert(out, nidm_input_dir=_input_nidm_dir(tmp_path))
     assert not marker.exists(), "the working directory's glob.py was imported"
@@ -233,8 +240,11 @@ def test_bootstrap_refuses_when_the_package_swaps_the_module(tmp_path):
 
 def test_conversion_is_given_the_file_the_app_imported(tmp_path, monkeypatch):
     """nidm_conversion passes the converter file its own process imported,
-    and drops empty components of the host PYTHONPATH."""
+    replacing a value the host environment already has (Apptainer passes the
+    host's environment through unless --cleanenv), and drops empty
+    components of the host PYTHONPATH."""
     monkeypatch.setenv("PYTHONPATH", f":/host/lib{os.pathsep}{os.pathsep}/host/other{os.pathsep}")
+    monkeypatch.setenv(CONVERTER_FILE_ENV, str(tmp_path / "host" / "segstats_jsonld" / "fs_to_nidm.py"))
     from unittest.mock import MagicMock, patch
     out = tmp_path / "out"
     recon_all_tree(out)
