@@ -487,6 +487,33 @@ class TestNIDMInputPreflight:
         mock_wrapper.return_value.process_subject.assert_called_once()
         mock_conversion.assert_called_once()
 
+    POINTER = "/annex/objects/MD5E-s41987--0123456789abcdef0123456789abcdef.ttl\n"
+
+    @pytest.mark.parametrize("content, unfetched", [
+        ("@prefix : <http://example.org/> .\n:a :b \n", False),
+        (POINTER, True),
+    ], ids=["turtle-error", "unlocked-annex-pointer"])
+    def test_unparseable_input_fails_before_recon_all_naming_the_file(
+            self, tmp_path, bids_single_session, content, unfetched):
+        """An input rdflib cannot parse failed the job with only "Error during
+        processing: at line 1 of <>: Bad syntax", which names no file. The
+        error names the input and says it could not be parsed as Turtle; an
+        unlocked git-annex pointer (a datalad clone before `datalad get`) is
+        called that."""
+        target = tmp_path / "NIDM" / "sub-001" / "nidm.ttl"
+        target.parent.mkdir(parents=True)
+        target.write_text(content)
+        result, mock_wrapper, mock_conversion = self._invoke_converting(
+            bids_single_session, tmp_path / "out", 'participant', '--nidm-input-dir',
+            str(tmp_path / "NIDM"))
+        assert result.exit_code == 1, result.output
+        mock_wrapper.return_value.process_subject.assert_not_called()
+        mock_conversion.assert_not_called()
+        errors = [line for line in result.output.splitlines() if " - ERROR - " in line]
+        assert any(str(target) in e and "could not be parsed as Turtle" in e for e in errors), errors
+        assert any("datalad get" in e and "git-annex" in e for e in errors) == unfetched, errors
+        assert not any("Error during processing" in e for e in errors), errors
+
     def test_skip_nidm_skips_the_preflight(self, tmp_path, bids_single_session):
         nidm = self._unfetched(tmp_path / "NIDM", "sub-001", "nidm.ttl")
         result, mock_wrapper = self._invoke(

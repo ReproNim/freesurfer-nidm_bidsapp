@@ -147,6 +147,26 @@ class NIDMInputNotRetrieved(FileNotFoundError):
     """
 
 
+class NIDMInputUnreadable(ValueError):
+    """The subject's NIDM input exists but rdflib cannot parse it."""
+
+
+def _looks_unfetched(path):
+    """True if path looks like git-annex content that was never fetched: a
+    symlink into .git/annex with nothing behind it, or a small regular file
+    holding an unlocked annex pointer (/annex/objects/<key>)."""
+    path = Path(path)
+    if path.is_symlink():
+        return not path.exists() and ".git/annex/" in os.readlink(path)
+    try:
+        if path.stat().st_size > 1024:
+            return False
+        with open(path, "rb") as f:
+            return f.read(64).lstrip().startswith(b"/annex/objects/")
+    except OSError:
+        return False
+
+
 def find_nidm_input_file(nidm_input_dir, participant_label, session=None, warn=False):
     """This subject's existing NIDM document, or None.
 
@@ -311,7 +331,7 @@ def nidm_input_subject_problem(nidm_input_file, participant_label):
     but not this one, or several nodes with its id and not exactly one owning
     an anatomical MRI acquisition). Called before recon-all, so that costs
     seconds rather than hours. The file is only parsed with rdflib; a file
-    rdflib cannot parse raises, as it would in fs_to_nidm.
+    rdflib cannot parse raises NIDMInputUnreadable, naming the file.
 
     Returns:
         str or None: fs_to_nidm's message when it would refuse the input, None
@@ -325,7 +345,19 @@ def nidm_input_subject_problem(nidm_input_file, participant_label):
     fs_to_nidm = _import_fs_to_nidm()
     path = str(nidm_input_file)
     graph = Graph()
-    graph.parse(path, format=util.guess_format(path))
+    rdf_format = util.guess_format(path)
+    try:
+        graph.parse(path, format=rdf_format)
+    except Exception as err:
+        # rdflib's message names no file ("at line 1 of <>: Bad syntax")
+        detail = " ".join(str(err).split())
+        message = (f"NIDM input {path} could not be parsed as "
+                   f"{'Turtle' if rdf_format == 'turtle' else rdf_format} "
+                   f"({type(err).__name__}: {detail})")
+        if _looks_unfetched(nidm_input_file):
+            message += ("; it looks like an unfetched git-annex file (run `datalad get` "
+                        "on the NIDM input dataset)")
+        raise NIDMInputUnreadable(message) from err
     printed = StringIO()
     try:
         with redirect_stdout(printed):
@@ -346,10 +378,15 @@ def check_nidm_input(nidm_input_dir, participant_label, session):
     nidm_input_file = find_nidm_input_file(nidm_input_dir, participant_label, session, warn=True)
     if nidm_input_file is None:
         return
-    problem = nidm_input_subject_problem(nidm_input_file, participant_label)
+    who = f"sub-{participant_label}" + (f" ses-{session}" if session else "")
+    try:
+        problem = nidm_input_subject_problem(nidm_input_file, participant_label)
+    except NIDMInputUnreadable as err:
+        logger.error(str(err))
+        logger.error(f"Not running recon-all for {who}: fetch or fix the NIDM input, or pass --skip-nidm")
+        sys.exit(1)
     if problem is None:
         return
-    who = f"sub-{participant_label}" + (f" ses-{session}" if session else "")
     logger.error(f"NIDM input {nidm_input_file} cannot take the FreeSurfer stats of {who}: {problem}")
     logger.error(f"Not running recon-all for {who}: fix the NIDM input, or pass --skip-nidm")
     sys.exit(1)
