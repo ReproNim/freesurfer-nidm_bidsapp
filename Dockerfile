@@ -47,10 +47,13 @@ RUN python3 -m pip install --upgrade pip setuptools wheel && \
 # with its directory first on sys.path and PYTHONPATH=/opt (as at run time),
 # the NIDM input check's import does not resolve to the installed converter
 # through the editable install (module file and the real package, not a
-# namespace package rooted at the checkout). The same checks run in
+# namespace package rooted at the checkout), or if PyNIDM is not 5.0.0 from
+# the image's site-packages (the converter silently uses PyNIDM 4.x
+# conventions when nidm.linkml is absent). The same checks run in
 # Singularity's %post.
 RUN command -v freesurfer-nidm && \
     python3 -c "import os, shutil, sys; sys.path[0] = os.path.dirname(shutil.which('freesurfer-nidm')); from segstats_jsonld.fs_to_nidm import SubjectLookupError, find_subject; import segstats_jsonld as p, segstats_jsonld.fs_to_nidm as m; (m.__file__ != '/opt/src/segstats_jsonld/segstats_jsonld/fs_to_nidm.py' or p.__file__ != '/opt/src/segstats_jsonld/segstats_jsonld/__init__.py') and sys.exit('freesurfer-nidm would import the converter from %s (package %s)' % (m.__file__, p.__file__)); print('freesurfer-nidm resolves the converter lookup from', m.__file__)" && \
+    python3 -c "import importlib.metadata, os, shutil, site, sys; sys.path[0] = os.path.dirname(shutil.which('freesurfer-nidm')); import nidm; v = importlib.metadata.version('pynidm'); f = os.path.realpath(nidm.__file__); (v != '5.0.0' or os.path.dirname(os.path.dirname(f)) not in [os.path.realpath(p) for p in site.getsitepackages()]) and sys.exit('freesurfer-nidm would use PyNIDM %s from %s, not 5.0.0 from the image site-packages %s' % (v, f, site.getsitepackages())); print('freesurfer-nidm uses PyNIDM', v, 'from', f)" && \
     freesurfer-nidm --version
 
 # Everything the app reads must be usable by a non-root --user, the same check

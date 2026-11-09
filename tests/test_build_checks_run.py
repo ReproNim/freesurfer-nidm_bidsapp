@@ -71,6 +71,10 @@ FAULTS = {
     "no-console-script": "console script",
     # a file the app reads is not readable by others
     "unreadable-file": "permissions",
+    # an older PyNIDM's metadata comes first on sys.path
+    "old-pynidm": "PyNIDM",
+    # a nidm package outside the image's site-packages comes first
+    "nidm-elsewhere": "PyNIDM",
 }
 
 
@@ -96,6 +100,13 @@ def build_tree(tmp_path, fault=None):
         (opt / "segstats_jsonld").mkdir()
         (opt / "segstats_jsonld" / "__init__.py").write_text("")
         (opt / "segstats_jsonld" / "fs_to_nidm.py").write_text(CONVERTER)
+    if fault == "old-pynidm":
+        info = opt / "pynidm-4.5.0.dist-info"
+        info.mkdir()
+        (info / "METADATA").write_text("Metadata-Version: 2.1\nName: pynidm\nVersion: 4.5.0\n")
+    if fault == "nidm-elsewhere":
+        (opt / "nidm").mkdir()
+        (opt / "nidm" / "__init__.py").write_text('__version__ = "5.0.0"\n')
     if fault == "unreadable-file":
         secret = opt / "src" / "private.py"
         secret.write_text("")
@@ -186,6 +197,7 @@ def test_build_checks_pass_without_a_fault(tmp_path, recipe):
     if recipe == "Singularity":
         assert SENTINEL in output, output
     assert "freesurfer-nidm resolves the converter lookup from" in output, output
+    assert "freesurfer-nidm uses PyNIDM 5.0.0 from" in output, output
 
 
 @pytest.mark.parametrize("fault", sorted(FAULTS))

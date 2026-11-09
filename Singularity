@@ -78,6 +78,10 @@ From: vnmd/freesurfer_8.0.0
     # python3 -O would drop an assert).
     command -v freesurfer-nidm
     PYTHONPATH=/opt python3 -c "import os, shutil, sys; sys.path[0] = os.path.dirname(shutil.which('freesurfer-nidm')); from segstats_jsonld.fs_to_nidm import SubjectLookupError, find_subject; import segstats_jsonld as p, segstats_jsonld.fs_to_nidm as m; (m.__file__ != '/opt/src/segstats_jsonld/segstats_jsonld/fs_to_nidm.py' or p.__file__ != '/opt/src/segstats_jsonld/segstats_jsonld/__init__.py') and sys.exit('freesurfer-nidm would import the converter from %s (package %s)' % (m.__file__, p.__file__)); print('freesurfer-nidm resolves the converter lookup from', m.__file__)"
+    # PyNIDM: the converter silently uses PyNIDM 4.x conventions when
+    # nidm.linkml is absent, so check the version requirements.txt pins
+    # and that nidm imports from the image's site-packages.
+    PYTHONPATH=/opt python3 -c "import importlib.metadata, os, shutil, site, sys; sys.path[0] = os.path.dirname(shutil.which('freesurfer-nidm')); import nidm; v = importlib.metadata.version('pynidm'); f = os.path.realpath(nidm.__file__); (v != '5.0.0' or os.path.dirname(os.path.dirname(f)) not in [os.path.realpath(p) for p in site.getsitepackages()]) and sys.exit('freesurfer-nidm would use PyNIDM %s from %s, not 5.0.0 from the image site-packages %s' % (v, f, site.getsitepackages())); print('freesurfer-nidm uses PyNIDM', v, 'from', f)"
     PYTHONPATH=/opt freesurfer-nidm --version
 
     # Last step: everything this recipe put under /opt must be usable by
