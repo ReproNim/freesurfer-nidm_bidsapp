@@ -352,3 +352,38 @@ def test_logged_command_replays_the_conversion(tmp_path, monkeypatch):
                             text=True, timeout=300)
     assert result.returncode == 0, result.stderr[-2000:]
     assert list(subject_dir.glob("aseg_nidm.jsonld")), list(subject_dir.iterdir())
+
+
+@pytest.mark.parametrize("with_input_nidm", [True, False])
+def test_logged_command_names_the_input_behind_a_temporary_n_file(tmp_path, with_input_nidm):
+    """With an input NIDM the logged command's -n file is a temporary copy
+    that is gone after the run; the log names the input it copies, so the
+    command can be rerun. Without one there is no -n file and no such line."""
+    import logging
+
+    nidm_input_dir = None
+    if with_input_nidm:
+        nidm_input_dir = tmp_path / "NIDM"
+        (nidm_input_dir / "sub-001").mkdir(parents=True)
+        (nidm_input_dir / "sub-001" / "nidm.ttl").write_text(INPUT_TTL)
+    out = tmp_path / "out"
+    recon_all_tree(out)
+    records = []
+    handler = logging.Handler(level=logging.INFO)
+    handler.emit = records.append
+    app_logger = logging.getLogger("freesurfer-nidm")
+    app_logger.addHandler(handler)
+    old_level = app_logger.level
+    app_logger.setLevel(logging.INFO)
+    try:
+        convert(out, nidm_input_dir=nidm_input_dir)
+    finally:
+        app_logger.removeHandler(handler)
+        app_logger.setLevel(old_level)
+    notes = [r.getMessage() for r in records if "is a temporary copy of" in r.getMessage()]
+    if not with_input_nidm:
+        assert notes == []
+        return
+    assert len(notes) == 1, notes
+    assert str(nidm_input_dir / "sub-001" / "nidm.ttl") in notes[0], notes
+    assert "copy the input there first" in notes[0], notes
