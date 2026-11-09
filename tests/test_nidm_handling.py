@@ -490,7 +490,13 @@ class TestNIDMAppendCommand:
         logged = [r.getMessage().split("Running command: ", 1)[1] for r in caplog.records
                   if "Running command: " in r.getMessage()]
         assert len(logged) == 1, logged
-        assert shlex.split(logged[0]) == [str(a) for a in cmd]
+        # VAR=value words for the environment the conversion needs, then the argv
+        words = shlex.split(logged[0])
+        env = mock_subprocess.call_args.kwargs["env"]
+        from src.run import CONVERTER_FILE_ENV
+        assert words[:2] == [f"{CONVERTER_FILE_ENV}={env[CONVERTER_FILE_ENV]}",
+                             f"PYTHONPATH={env['PYTHONPATH']}"], words[:2]
+        assert words[2:] == [str(a) for a in cmd]
 
     @pytest.mark.parametrize("t1_images, expected", [
         (["/bids/sub-001/ses-1/anat/sub-001_ses-1_run-1_T1w.nii.gz"], ["sub-001_ses-1_run-1_T1w.nii.gz"]),

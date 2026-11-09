@@ -302,3 +302,45 @@ def test_conversion_logs_the_pynidm_it_loaded(tmp_path, with_input_nidm):
     assert found[0].levelno == logging.INFO, lines
     assert f"PyNIDM {nidm.__version__} from {os.path.realpath(nidm.__file__)}" in lines[0], lines
     assert "fs_to_nidm.py" in lines[0], lines
+
+
+def test_logged_command_replays_the_conversion(tmp_path):
+    """The "Running command:" line is logged for replay. The conversion needs
+    FREESURFER_NIDM_CONVERTER_FILE and the PYTHONPATH the app sets, so the
+    line must carry them: run through bash as logged, it converts again."""
+    import logging
+    import os
+    import shlex
+    import subprocess
+
+    from src.run import CONVERTER_FILE_ENV
+
+    out = tmp_path / "out"
+    recon_all_tree(out)
+    records = []
+    handler = logging.Handler(level=logging.INFO)
+    handler.emit = records.append
+    app_logger = logging.getLogger("freesurfer-nidm")
+    app_logger.addHandler(handler)
+    old_level = app_logger.level
+    app_logger.setLevel(logging.INFO)
+    try:
+        convert(out)
+    finally:
+        app_logger.removeHandler(handler)
+        app_logger.setLevel(old_level)
+    logged = [r.getMessage().split("Running command: ", 1)[1] for r in records
+              if r.getMessage().startswith("Running command: ")]
+    assert len(logged) == 1, logged
+    words = shlex.split(logged[0])
+    assert any(w.startswith(CONVERTER_FILE_ENV + "=") for w in words), words
+
+    subject_dir = out / "sub-001"
+    for f in subject_dir.glob("*_nidm.jsonld"):
+        f.unlink()
+    env = {k: v for k, v in os.environ.items() if k not in (CONVERTER_FILE_ENV, "PYTHONPATH")}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    result = subprocess.run(["bash", "-c", logged[0]], cwd=tmp_path, env=env, capture_output=True,
+                            text=True, timeout=300)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert list(subject_dir.glob("aseg_nidm.jsonld")), list(subject_dir.iterdir())

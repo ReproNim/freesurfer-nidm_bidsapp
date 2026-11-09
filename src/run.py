@@ -590,9 +590,6 @@ def nidm_conversion(
                 if nidm_input_dir and verbose:
                     logger.info(f"No NIDM file found in {nidm_input_dir}; creating new output")
 
-            # Log the command for debugging and replay purposes
-            logger.info(f"Running command: {shlex.join(cmd)}")
-
             # Snapshot by modification time, not just name: a re-run (e.g. regenerating
             # NIDM with --skip-freesurfer) rewrites the converter's files under the same
             # names, and those are this run's outputs.
@@ -609,13 +606,20 @@ def nidm_conversion(
             pythonpath_entries = [str(project_root), str(project_root / "src"), str(project_root / "src" / "segstats_jsonld")]
             if existing_pythonpath:
                 # without empty components: each is the working directory (on
-                # Python 3.12 one also stops the interpreter from starting when
-                # the working directory has been removed)
+                # Python 3.11 and 3.12 one also stops the interpreter from
+                # starting when the working directory has been removed)
                 pythonpath_entries += [p for p in existing_pythonpath.split(os.pathsep) if p]
             env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
             env.setdefault("RDFLIB_STORE_NO_BIND_OVERRIDE", "1")
             env.setdefault("SEGSTATS_JSONLD_ALLOW_NEW_KEYS", "1")
             env.pop("PYTHONHOME", None)
+
+            # Log the command for debugging and replay: shell-quoted, with the
+            # environment it needs that the app sets, so the line runs as-is
+            # in a POSIX shell (with an input NIDM, the -n file is a temporary
+            # copy that does not outlive the run).
+            replay_env = [f"{key}={shlex.quote(env[key])}" for key in (CONVERTER_FILE_ENV, "PYTHONPATH")]
+            logger.info(f"Running command: {' '.join(replay_env)} {shlex.join(cmd)}")
 
             result = subprocess.run(cmd, capture_output=True, text=True, env=env)
             for line in result.stdout.splitlines():
