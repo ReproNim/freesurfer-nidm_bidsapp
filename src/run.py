@@ -261,6 +261,10 @@ CONVERTER_FILE_ENV = "FREESURFER_NIDM_CONVERTER_FILE"
 # The bootstrap's one stdout line naming the converter file and the PyNIDM
 # version and file the conversion imported; nidm_conversion logs it.
 CONVERTER_REPORT = "freesurfer-nidm conversion uses:"
+# The bootstrap's stdout line when nidm is not under the interpreter's
+# site-packages (a host PYTHONPATH entry, or ~/.local's user site when home is
+# mounted); nidm_conversion logs it as a warning.
+CONVERTER_PYNIDM_WARNING = "freesurfer-nidm conversion PyNIDM warning:"
 CONVERTER_BOOTSTRAP = f"""\
 import os, sys
 try:
@@ -288,8 +292,14 @@ if os.path.realpath(got) != os.path.realpath(want):
     sys.exit("fs_to_nidm: the conversion would run %s, not %s, which the NIDM input check "
              "ran" % (got, want))
 nidm = sys.modules.get("nidm")
+nidm_file = os.path.realpath(getattr(nidm, "__file__", None) or "?")
 print("{CONVERTER_REPORT} fs_to_nidm %s; PyNIDM %s from %s" % (
-    got, getattr(nidm, "__version__", "?"), os.path.realpath(getattr(nidm, "__file__", None) or "?")), flush=True)
+    got, getattr(nidm, "__version__", "?"), nidm_file), flush=True)
+import site
+site_dirs = [os.path.realpath(d) for d in site.getsitepackages()]
+if os.path.dirname(os.path.dirname(nidm_file)) not in site_dirs:
+    print("{CONVERTER_PYNIDM_WARNING} PyNIDM %s is not the image's copy (not under %s); "
+          "the conversion goes on with it" % (nidm_file, ", ".join(site_dirs)), flush=True)
 sys.argv[0] = "fs_to_nidm"
 sys.exit(main())
 """
@@ -601,6 +611,13 @@ def nidm_conversion(
             env = os.environ.copy()
             # The conversion runs the converter file this process imports.
             env[CONVERTER_FILE_ENV] = os.path.realpath(_import_fs_to_nidm().__file__)
+            if not Path(env[CONVERTER_FILE_ENV]).is_relative_to(CONVERTER_DIR.resolve()):
+                # a host PYTHONPATH entry (or a user site) came before the image's
+                # editable install; the check and the conversion both use it
+                logger.warning(
+                    f"fs_to_nidm {env[CONVERTER_FILE_ENV]} is not the image's copy (under "
+                    f"{CONVERTER_DIR}); the conversion goes on with it"
+                )
             project_root = Path(__file__).resolve().parents[1]
             existing_pythonpath = env.get("PYTHONPATH")
             pythonpath_entries = [str(project_root), str(project_root / "src"), str(project_root / "src" / "segstats_jsonld")]
@@ -625,6 +642,8 @@ def nidm_conversion(
             for line in result.stdout.splitlines():
                 if line.startswith(CONVERTER_REPORT):
                     logger.info(f"NIDM conversion uses{line[len(CONVERTER_REPORT):]}")
+                elif line.startswith(CONVERTER_PYNIDM_WARNING):
+                    logger.warning(f"NIDM conversion:{line[len(CONVERTER_PYNIDM_WARNING):]}")
 
             if result.returncode != 0:
                 logger.error(f"NIDM conversion failed for {fs_subject_id}")

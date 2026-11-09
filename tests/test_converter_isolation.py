@@ -257,3 +257,86 @@ def test_conversion_is_given_the_file_the_app_imported(tmp_path, monkeypatch):
     assert os.path.realpath(env[CONVERTER_FILE_ENV]) == _installed_converter_file()
     entries = env["PYTHONPATH"].split(os.pathsep)
     assert "" not in entries and entries[-2:] == ["/host/lib", "/host/other"], entries
+
+
+NOT_THE_IMAGES = "is not the image's copy"
+
+
+def _warnings_during(fn):
+    import logging
+    records = []
+    handler = logging.Handler(level=logging.WARNING)
+    handler.emit = records.append
+    app_logger = logging.getLogger("freesurfer-nidm")
+    app_logger.addHandler(handler)
+    try:
+        fn()
+    finally:
+        app_logger.removeHandler(handler)
+    return [r.getMessage() for r in records if r.levelno >= logging.WARNING]
+
+
+def test_a_converter_from_a_host_pythonpath_is_a_warning(tmp_path):
+    """A segstats_jsonld on a host PYTHONPATH entry comes before the image's
+    editable install, and the check and the conversion both use it. The run
+    goes on, but the log says, at WARNING, that the converter file is not
+    the image's copy."""
+    host = tmp_path / "host"
+    host.mkdir()
+    decoy = _decoy_package(host, tmp_path / "unused")
+    script = f"""
+import logging, sys
+from unittest.mock import MagicMock, patch
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(levelname)s %(message)s")
+from src.run import nidm_conversion
+w = MagicMock(); w.get_subject_t1_info.return_value = {{"T1w_images": [], "T2w_images": []}}
+def run(cmd, *a, **k):
+    out = cmd[cmd.index("-o") + 1]
+    open(out + "/aseg_nidm.jsonld", "w").write('{{"@id": "http://example.org/a", "http://example.org/p": "1"}}')
+    return MagicMock(returncode=0, stdout="", stderr="")
+with patch("src.run.subprocess.run", side_effect=run):
+    nidm_conversion({str(tmp_path / 'out')!r}, "001", w)
+"""
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=f"{host}{os.pathsep}{REPO_ROOT}")
+    result = subprocess.run([sys.executable, "-c", "import sys; sys.path.pop(0); " + script.strip()],
+                            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=300)
+    assert result.returncode == 0, result.stderr[-2000:]
+    warned = [l for l in result.stdout.splitlines() if l.startswith("WARNING") and NOT_THE_IMAGES in l]
+    assert len(warned) == 1 and str((decoy / "fs_to_nidm.py").resolve()) in warned[0], result.stdout
+
+
+def _user_site_nidm(tmp_path):
+    """A user-site directory (as ~/.local/lib/pythonX.Y/site-packages) whose
+    nidm package is a thin copy of the installed one: its __init__ runs the
+    real one with the real package's __path__, so the converter works and
+    only nidm.__file__ is outside site-packages."""
+    import nidm as real_nidm
+    real_dir = os.path.dirname(os.path.realpath(real_nidm.__file__))
+    user_site = tmp_path / ".local" / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}" / "site-packages"
+    (user_site / "nidm").mkdir(parents=True)
+    (user_site / "nidm" / "__init__.py").write_text(
+        f"__path__ = [{real_dir!r}]\n"
+        f"exec(compile(open({os.path.join(real_dir, '__init__.py')!r}).read(), __file__, 'exec'))\n")
+    return user_site
+
+
+def test_a_pynidm_from_outside_site_packages_is_a_warning(tmp_path, monkeypatch):
+    """With home mounted, ~/.local's site-packages comes before the image's,
+    so a PyNIDM there is what the conversion imports. The run goes on, with a
+    WARNING naming the file and saying it is not the image's copy."""
+    user_site = _user_site_nidm(tmp_path)
+    out = tmp_path / "out"
+    recon_all_tree(out)
+    monkeypatch.setenv("PYTHONPATH", str(user_site))
+    warnings = _warnings_during(lambda: convert(out, nidm_input_dir=_input_nidm_dir(tmp_path)))
+    warned = [w for w in warnings if NOT_THE_IMAGES in w]
+    assert len(warned) == 1, warnings
+    assert str(user_site / "nidm" / "__init__.py") in warned[0] and "PyNIDM" in warned[0], warned
+
+
+def test_the_image_layout_logs_no_copy_warning(tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    recon_all_tree(out)
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    warnings = _warnings_during(lambda: convert(out, nidm_input_dir=_input_nidm_dir(tmp_path)))
+    assert not [w for w in warnings if NOT_THE_IMAGES in w], warnings
