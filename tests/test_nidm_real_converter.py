@@ -185,8 +185,14 @@ def _parse_with_checked_out_converter(tmp_path, with_input_nidm):
     wrapper = MagicMock()
     wrapper.get_subject_t1_info.return_value = {
         "T1w_images": ["/bids/sub-001/anat/sub-001_run-1_T1w.nii.gz"], "T2w_images": []}
-    with patch("src.run.subprocess.run") as run:
-        run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    def converted(cmd, *args, **kwargs):
+        # without an input NIDM, a run that writes nothing fails the subject
+        if "-o" in cmd:
+            (Path(cmd[cmd.index("-o") + 1]) / "aseg_nidm.jsonld").write_text(
+                '{"@id": "http://example.org/aseg", "http://example.org/p": "1"}')
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("src.run.subprocess.run", side_effect=converted) as run:
         nidm_conversion(str(out), "001", wrapper,
                         nidm_input_dir=str(nidm_input_dir) if nidm_input_dir else None)
     cmd = next(c.args[0] for c in run.call_args_list if CONVERTER_BOOTSTRAP in c.args[0])

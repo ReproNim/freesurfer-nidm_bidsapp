@@ -23,6 +23,18 @@ from click.testing import CliRunner
 from src.run import CONVERTER_BOOTSTRAP, cli
 
 
+def _writing_converter_output(result):
+    """A subprocess.run stand-in that returns result and, for fs_to_nidm -o,
+    writes one converter output: without an input NIDM, a conversion that
+    writes nothing fails the subject."""
+    def run(cmd, *args, **kwargs):
+        if "-o" in cmd:
+            (Path(cmd[cmd.index("-o") + 1]) / "aseg_nidm.jsonld").write_text(
+                '{"@id": "http://example.org/aseg", "http://example.org/p": "1"}')
+        return result
+    return run
+
+
 @pytest.fixture
 def bids_dataset(tmp_path):
     """Create a temporary BIDS dataset for testing."""
@@ -155,6 +167,7 @@ def test_basic_run(mock_subprocess_run, mock_wrapper_class, mock_layout, bids_da
 
     # Set up subprocess.run mock
     mock_subprocess_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    mock_subprocess_run.side_effect = _writing_converter_output(mock_subprocess_run.return_value)
 
     # Create proper BIDS dataset structure
     subject_dir = Path(bids_dataset) / "sub-001"
@@ -306,6 +319,7 @@ def test_custom_freesurfer_dir(bids_dataset, output_dir, freesurfer_license):
             stderr="",
             check_returncode=lambda: None
         )
+        mock_nidm.side_effect = _writing_converter_output(mock_nidm.return_value)
 
         # Run the script
         runner = CliRunner()
@@ -568,6 +582,7 @@ def test_verbose_output(bids_dataset, output_dir, freesurfer_license):
             stderr="",
             check_returncode=lambda: None
         )
+        mock_nidm.side_effect = _writing_converter_output(mock_nidm.return_value)
 
         # Run the script
         runner = CliRunner()
@@ -699,6 +714,7 @@ def test_processing_summary(bids_dataset, output_dir, freesurfer_license):
             stderr=b"",
             check_returncode=lambda: None
         )
+        mock_nidm.side_effect = _writing_converter_output(mock_nidm.return_value)
 
         # Run the script
         runner = CliRunner()
@@ -830,6 +846,7 @@ def test_t1_t2_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
             stderr="",
             check_returncode=lambda: None
         )
+        mock_nidm.side_effect = _writing_converter_output(mock_nidm.return_value)
 
         # Run the test
         runner = CliRunner()
@@ -961,6 +978,7 @@ def test_t1_only_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
             stderr=b"",
             check_returncode=lambda: None
         )
+        mock_nidm.side_effect = _writing_converter_output(mock_nidm.return_value)
 
         # Run the test
         runner = CliRunner()

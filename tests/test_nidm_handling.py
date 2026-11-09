@@ -880,3 +880,101 @@ with patch("src.run.subprocess.run", side_effect=terminated):
                                 capture_output=True, text=True, timeout=120)
         assert result.returncode == 143, (result.returncode, result.stderr[-2000:])
         assert [p.name for p in (out / "sub-001").iterdir() if p.is_file()] == []
+
+
+class TestNIDMWithoutInputFailsClosed:
+    """Without an input NIDM, nidm.ttl is the merge of fs_to_nidm's
+    `*_nidm.jsonld` outputs. A converter output that cannot be parsed, or a
+    nidm.ttl that cannot be written, fails the subject (exit 1) and leaves no
+    nidm.ttl and no temporary file, as the input branch does."""
+
+    JSONLD = '{"@id": "http://example.org/%s", "http://example.org/p": "%s"}'
+
+    @staticmethod
+    def _wrapper():
+        wrapper = MagicMock()
+        wrapper.get_subject_t1_info.return_value = {"T1w_images": [], "T2w_images": []}
+        return wrapper
+
+    @staticmethod
+    def _writing(files):
+        """A stand-in fs_to_nidm -o that writes `files` into its output dir."""
+        def run(cmd, *args, **kwargs):
+            out = Path(cmd[cmd.index("-o") + 1])
+            for name, text in files.items():
+                (out / name).write_text(text)
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return run
+
+    def _convert(self, tmp_path, caplog, files, serialize=None):
+        from rdflib import Graph
+        from src.run import nidm_conversion
+        patches = [patch('src.run.subprocess.run', side_effect=self._writing(files))]
+        if serialize is not None:
+            patches.append(patch.object(Graph, "serialize", autospec=True, side_effect=serialize))
+        with caplog.at_level("INFO"), pytest.raises(SystemExit) as exc:
+            for p in patches:
+                p.start()
+            try:
+                nidm_conversion(tmp_path / "out", "001", self._wrapper())
+            finally:
+                for p in patches:
+                    p.stop()
+        assert exc.value.code == 1
+        subject_dir = tmp_path / "out" / "sub-001"
+        assert not (subject_dir / "nidm.ttl").exists()
+        assert [p.name for p in subject_dir.iterdir() if p.name.startswith(".nidm.")] == []
+        messages = [r.getMessage() for r in caplog.records]
+        assert not any("NIDM conversion complete" in m for m in messages), messages
+        return [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+
+    @pytest.mark.parametrize("partial", [False, True])
+    def test_a_failed_nidm_ttl_write_fails_the_subject(self, tmp_path, caplog, partial):
+        import errno
+
+        def no_space(self_graph, destination=None, **kwargs):
+            if partial:
+                Path(destination).write_text("@prefix : <http://example.org/> .\n:half")
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        errors = self._convert(tmp_path, caplog, {"aseg_nidm.jsonld": self.JSONLD % ("aseg", "1")},
+                               serialize=no_space)
+        assert any("No space left on device" in m for m in errors), errors
+
+    def test_an_unparseable_converter_output_fails_the_subject(self, tmp_path, caplog):
+        errors = self._convert(tmp_path, caplog, {"aseg_nidm.jsonld": self.JSONLD % ("aseg", "1"),
+                                                  "wmparc_nidm.jsonld": "{ not json"})
+        assert any("wmparc_nidm.jsonld" in m for m in errors), errors
+
+    def test_no_converter_output_fails_the_subject(self, tmp_path, caplog):
+        errors = self._convert(tmp_path, caplog, {})
+        assert errors
+
+    def test_nidm_ttl_is_written_through_a_temporary_file(self, tmp_path):
+        """The merged graph is serialized to a temporary file in the subject
+        directory and renamed to nidm.ttl, never written to nidm.ttl in place."""
+        import os
+        from rdflib import Graph
+        from src.run import nidm_conversion
+        seen = []
+        real = Graph.serialize
+
+        def recording(self_graph, destination=None, **kwargs):
+            seen.append(Path(destination))
+            return real(self_graph, destination=destination, **kwargs)
+
+        old_umask = os.umask(0o022)
+        try:
+            with patch('src.run.subprocess.run',
+                       side_effect=self._writing({"aseg_nidm.jsonld": self.JSONLD % ("aseg", "1")})), \
+                 patch.object(Graph, "serialize", autospec=True, side_effect=recording):
+                nidm_conversion(tmp_path / "out", "001", self._wrapper())
+        finally:
+            os.umask(old_umask)
+        subject_dir = tmp_path / "out" / "sub-001"
+        assert len(seen) == 1 and seen[0].parent == subject_dir, seen
+        assert seen[0].name.startswith(".nidm.") and not seen[0].exists()
+        nidm_ttl = subject_dir / "nidm.ttl"
+        assert ":aseg" in nidm_ttl.read_text()
+        assert nidm_ttl.stat().st_mode & 0o777 == 0o644
+

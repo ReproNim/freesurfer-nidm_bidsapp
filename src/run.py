@@ -581,12 +581,18 @@ def nidm_conversion(
     new_outputs = [Path(nidm_dir) / name for name in sorted(current_outputs)
                    if existing_outputs.get(name) != current_outputs[name]]
 
-    if not new_outputs and not copied_nidm:
-        logger.warning("No new NIDM outputs were generated; skipping aggregation step")
-        return
+    # From here on, every way of not writing nidm.ttl fails the subject: an
+    # exit 0 without it is counted as done by a scheduler such as BABS.
+    def _fail(reason):
+        logger.error(f"NIDM conversion failed for {fs_subject_id}: {reason}")
+        logger.error(f"No {target_ttl.name} written for {fs_subject_id}")
+        sys.exit(1)
 
     # The product is always <subject_dir>/nidm.ttl.
     target_ttl = Path(nidm_dir) / "nidm.ttl"
+
+    if not new_outputs and not copied_nidm:
+        _fail("fs_to_nidm exited 0 but wrote no new output")
 
     aggregation_sources = []
     if copied_nidm and Path(copied_nidm).exists():
@@ -622,8 +628,7 @@ def nidm_conversion(
             aggregation_sources.append(candidate)
 
     if not aggregation_sources:
-        logger.warning("No NIDM sources found to aggregate after conversion")
-        return
+        _fail("fs_to_nidm wrote no NIDM output to merge into nidm.ttl")
 
     # Append path: fs_to_nidm has already accumulated everything into the copied
     # file, which *is* the target. Re-serializing it would be a no-op round-trip.
@@ -645,26 +650,41 @@ def nidm_conversion(
             return "json-ld"
         return "xml"
 
+    # A source that cannot be parsed fails the subject rather than being
+    # left out: nidm.ttl would silently lack that stats file's measures.
     aggregated_graph = Graph()
     for src in aggregation_sources:
         try:
             aggregated_graph.parse(str(src), format=_guess_rdf_format(src))
-        except Exception as parse_error:  # pragma: no cover - depends on runtime env
-            logger.warning(f"Skipping NIDM source {src} due to parse error: {parse_error}")
+        except Exception as parse_error:
+            _fail(f"cannot parse its output {src} ({type(parse_error).__name__}: {parse_error})")
 
     if len(aggregated_graph) == 0:
-        logger.warning("Aggregated NIDM graph is empty; skipping serialization")
-        return
+        _fail(f"its outputs ({', '.join(p.name for p in aggregation_sources)}) hold no triples")
 
-    try:
-        aggregated_graph.serialize(destination=str(target_ttl), format="turtle")
-        logger.info(
-            f"Wrote aggregated NIDM output: {target_ttl.name} "
-            f"({target_ttl.stat().st_size} bytes, {len(aggregated_graph)} triples) "
-            f"from {len(aggregation_sources)} source(s)"
-        )
-    except Exception as serialize_error:  # pragma: no cover
-        logger.warning(f"Failed to write aggregated TTL output {target_ttl}: {serialize_error}")
+    # Serialize to a temporary file in the subject directory and rename it to
+    # nidm.ttl, so a failed or interrupted write (a full disk, SIGTERM) leaves
+    # no partial nidm.ttl; the temporary file is removed on any exit.
+    fd, tmp_name = tempfile.mkstemp(prefix=TEMPORARY_PREFIX, suffix=".ttl", dir=nidm_dir)
+    os.close(fd)
+    merged = Path(tmp_name)
+    with _exit_on_sigterm():
+        try:
+            try:
+                aggregated_graph.serialize(destination=str(merged), format="turtle")
+                umask = os.umask(0)
+                os.umask(umask)
+                os.chmod(merged, 0o666 & ~umask)
+                os.replace(merged, target_ttl)
+            except OSError as serialize_error:
+                _fail(f"cannot write {target_ttl} ({serialize_error})")
+        finally:
+            merged.unlink(missing_ok=True)
+    logger.info(
+        f"Wrote aggregated NIDM output: {target_ttl.name} "
+        f"({target_ttl.stat().st_size} bytes, {len(aggregated_graph)} triples) "
+        f"from {len(aggregation_sources)} source(s)"
+    )
 
     logger.info("================================")
     logger.info(f"NIDM conversion complete for {fs_subject_id}")
