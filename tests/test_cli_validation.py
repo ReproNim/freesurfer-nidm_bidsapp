@@ -514,6 +514,29 @@ class TestNIDMInputPreflight:
         assert any("datalad get" in e and "git-annex" in e for e in errors) == unfetched, errors
         assert not any("Error during processing" in e for e in errors), errors
 
+    @pytest.mark.parametrize("content", [
+        "",
+        "@prefix prov: <http://www.w3.org/ns/prov#> .\n"
+        "@prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/> .\n"
+        "<http://iri.nidash.org/person> a prov:Agent, prov:Person ; ndar:src_subject_id \"1\" .\n",
+    ], ids=["empty-file", "subject-without-project"])
+    def test_input_without_a_project_fails_before_recon_all(
+            self, tmp_path, bids_single_session, content):
+        """fs_to_nidm attaches the stats to the input's nidm:Project and
+        crashes after recon-all (UnboundLocalError) when there is none, also
+        for an empty file. The check refuses such an input first."""
+        target = tmp_path / "NIDM" / "sub-001" / "nidm.ttl"
+        target.parent.mkdir(parents=True)
+        target.write_text(content)
+        result, mock_wrapper, mock_conversion = self._invoke_converting(
+            bids_single_session, tmp_path / "out", 'participant', '--nidm-input-dir',
+            str(tmp_path / "NIDM"))
+        assert result.exit_code == 1, result.output
+        mock_wrapper.return_value.process_subject.assert_not_called()
+        mock_conversion.assert_not_called()
+        errors = [line for line in result.output.splitlines() if " - ERROR - " in line]
+        assert any(str(target) in e and "no nidm:Project" in e for e in errors), errors
+
     def test_skip_nidm_skips_the_preflight(self, tmp_path, bids_single_session):
         nidm = self._unfetched(tmp_path / "NIDM", "sub-001", "nidm.ttl")
         result, mock_wrapper = self._invoke(

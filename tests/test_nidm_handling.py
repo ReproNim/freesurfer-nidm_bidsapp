@@ -9,6 +9,11 @@ from unittest.mock import MagicMock, patch, call
 from click.testing import CliRunner
 from src.run import cli
 
+# The smallest input NIDM the pre-recon-all check accepts: fs_to_nidm needs a
+# nidm:Project to attach the stats to.
+PROJECT_ONLY = ("@prefix : <http://example.org/> .\n@prefix nidm: <http://purl.org/nidash/nidm#> .\n"
+                ":project a nidm:Project .\n")
+
 
 class TestNIDMInputDiscovery:
     """Test NIDM input file discovery logic."""
@@ -384,7 +389,7 @@ class TestNIDMAppendCommand:
         """
         nidm_dir = bids_single_session.parent / "NIDM"
         nidm_dir.mkdir()
-        (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .")
+        (nidm_dir / "nidm.ttl").write_text(PROJECT_ONLY)
 
         output_dir = tmp_path / "output"
         output_dir.mkdir()
@@ -420,7 +425,7 @@ class TestNIDMAppendCommand:
         if with_input_nidm:
             nidm_dir = bids_single_session.parent / "NIDM"
             nidm_dir.mkdir()
-            (nidm_dir / "nidm.ttl").write_text("@prefix : <http://example.org/> .")
+            (nidm_dir / "nidm.ttl").write_text(PROJECT_ONLY)
 
         output_dir = tmp_path / "output"
         output_dir.mkdir()
@@ -602,6 +607,7 @@ class TestNIDMAppendCommand:
         nidm_in.mkdir()
         (nidm_in / "nidm.ttl").write_text(
             '@prefix ex: <http://example.org/> .\nex:subject a ex:Person .\n'
+            '<http://iri.nidash.org/project> a <http://purl.org/nidash/nidm#Project> .\n'
         )
 
         output_dir = tmp_path / "output"

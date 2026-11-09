@@ -22,7 +22,7 @@ import click
 from bids import BIDSLayout
 from src.freesurfer.wrapper import DEFAULT_MAX_VOXEL_SIZE, FreeSurferWrapper
 from src.utils import get_app_version, get_version_info, setup_logging
-from rdflib import Graph
+from rdflib import RDF, Graph, URIRef
 
 try:
     from importlib.metadata import version
@@ -145,6 +145,9 @@ class NIDMInputNotRetrieved(FileNotFoundError):
     a miss would build nidm.ttl without the inherited demographics and
     provenance and still exit 0, for every subject in the dataset.
     """
+
+
+NIDM_PROJECT = URIRef("http://purl.org/nidash/nidm#Project")
 
 
 class NIDMInputUnreadable(ValueError):
@@ -333,8 +336,12 @@ def nidm_input_subject_problem(nidm_input_file, participant_label):
     seconds rather than hours. The file is only parsed with rdflib; a file
     rdflib cannot parse raises NIDMInputUnreadable, naming the file.
 
+    An input without a nidm:Project is refused here too: fs_to_nidm does not
+    refuse it but crashes on it after recon-all.
+
     Returns:
-        str or None: fs_to_nidm's message when it would refuse the input, None
+        str or None: fs_to_nidm's message when it would refuse the input (or the
+        missing nidm:Project), None
         when it would find (or, under --forcenidm, add) the subject.
     """
     from contextlib import redirect_stdout
@@ -358,6 +365,12 @@ def nidm_input_subject_problem(nidm_input_file, participant_label):
             message += ("; it looks like an unfetched git-annex file (run `datalad get` "
                         "on the NIDM input dataset)")
         raise NIDMInputUnreadable(message) from err
+    # fs_to_nidm attaches the stats to the input's nidm:Project; with none
+    # (an empty or truncated file, a hand-built document) it fails after
+    # recon-all with an UnboundLocalError.
+    if (None, RDF.type, NIDM_PROJECT) not in graph:
+        return (f"it has no nidm:Project ({NIDM_PROJECT}), which fs_to_nidm needs to attach "
+                "the stats to" + (" (the file is empty)" if len(graph) == 0 else ""))
     printed = StringIO()
     try:
         with redirect_stdout(printed):
