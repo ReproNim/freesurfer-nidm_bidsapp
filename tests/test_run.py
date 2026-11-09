@@ -710,8 +710,8 @@ def test_processing_summary(bids_dataset, output_dir, freesurfer_license):
         # Mock successful NIDM conversion
         mock_nidm.return_value = MagicMock(
             returncode=0,
-            stdout=b"NIDM conversion successful",
-            stderr=b"",
+            stdout="NIDM conversion successful",
+            stderr="",
             check_returncode=lambda: None
         )
         mock_nidm.side_effect = _writing_converter_output(mock_nidm.return_value)
@@ -974,8 +974,8 @@ def test_t1_only_nidm_conversion(bids_dataset, output_dir, freesurfer_license):
         # Mock successful NIDM conversion
         mock_nidm.return_value = MagicMock(
             returncode=0,
-            stdout=b"NIDM conversion successful",
-            stderr=b"",
+            stdout="NIDM conversion successful",
+            stderr="",
             check_returncode=lambda: None
         )
         mock_nidm.side_effect = _writing_converter_output(mock_nidm.return_value)
