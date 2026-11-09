@@ -92,9 +92,14 @@ From: vnmd/freesurfer_8.0.0
 %environment
     # Set runtime license path to match BABS mount point
     export FS_LICENSE=/SGLR/FREESURFER_HOME/license.txt
-    # Add /opt to the Python path. No empty entry when the host sets no
-    # PYTHONPATH: Python reads an empty entry as the working directory, where a
-    # converter checkout would shadow the installed converter.
+    # Add /opt to the Python path, with no empty entry when the host sets no
+    # PYTHONPATH (Python reads an empty entry as the working directory, where
+    # a converter checkout would shadow the installed converter). A host
+    # PYTHONPATH, which Apptainer passes in unless the run uses --cleanenv, is
+    # kept after /opt as given, so one with an empty component (`/x:`) still
+    # puts the working directory on the app's sys.path. The app drops the
+    # working directory from sys.path only around its converter import and in
+    # the conversion's own interpreter (src/run.py, CONVERTER_BOOTSTRAP).
     export PYTHONPATH=/opt${PYTHONPATH:+:$PYTHONPATH}
     # Add Python packages to path
     export PATH=/usr/local/bin:$PATH

@@ -210,13 +210,58 @@ def find_nidm_input_file(nidm_input_dir, participant_label, session=None, warn=F
 # with `python -m segstats_jsonld.fs_to_nidm`: the package __init__ imports
 # that module, so -m executed it twice and runpy warned (RuntimeWarning,
 # "found in sys.modules ...") on every run.
+#
+# The NIDM input check (app process) and the conversion (a new interpreter
+# started with `python -c CONVERTER_BOOTSTRAP`) must run the same converter
+# file. Two things put the working directory on sys.path, where a package or
+# module named like the converter or one of its imports (segstats_jsonld,
+# glob, ...) would replace the installed code:
+# - `-c` makes '' the conversion's sys.path[0] (Python 3.10, the image's, has
+#   no -P);
+# - an empty PYTHONPATH component, in both processes. The image's own
+#   PYTHONPATH (Dockerfile ENV, Singularity %environment) has none, but a host
+#   PYTHONPATH that Apptainer passes through (it does unless the run uses
+#   --cleanenv) can end or start with a colon.
+# So, in both processes, '' and every entry that is the working directory are
+# dropped before the converter is imported: in the app process by
+# _import_fs_to_nidm, for that import only; in the conversion by the
+# bootstrap, for the whole run, before anything else is imported. When the
+# working directory no longer exists (os.getcwd() raises), only '' entries are
+# dropped. nidm_conversion also drops empty components of the host PYTHONPATH
+# it passes to the conversion. The bootstrap then loads segstats_jsonld from the directory of the
+# file named by CONVERTER_FILE_ENV, which nidm_conversion sets to the
+# fs_to_nidm file the app process imported, and exits non-zero naming both
+# files if it ends up with another one. Other entries (/opt, /opt/src, a host
+# PYTHONPATH's directories) are not filtered.
 CONVERTER_MODULE = "segstats_jsonld.fs_to_nidm"
-CONVERTER_BOOTSTRAP = (
-    "import sys; "
-    f"from {CONVERTER_MODULE} import main; "
-    'sys.argv[0] = "fs_to_nidm"; '
-    "sys.exit(main())"
-)
+CONVERTER_FILE_ENV = "FREESURFER_NIDM_CONVERTER_FILE"
+CONVERTER_BOOTSTRAP = f"""\
+import os, sys
+try:
+    cwd = os.path.realpath(os.getcwd())
+except OSError:
+    cwd = None
+sys.path[:] = [p for p in sys.path if p and (cwd is None or os.path.realpath(p) != cwd)]
+import importlib.util
+want = os.environ.get("{CONVERTER_FILE_ENV}", "")
+package_dir = os.path.dirname(want)
+init = os.path.join(package_dir, "__init__.py")
+if os.path.basename(want) != "fs_to_nidm.py" or not os.path.isfile(want) or not os.path.isfile(init):
+    sys.exit("fs_to_nidm: {CONVERTER_FILE_ENV}=%r does not name fs_to_nidm.py in a regular "
+             "segstats_jsonld package" % want)
+spec = importlib.util.spec_from_file_location("segstats_jsonld", init,
+                                              submodule_search_locations=[package_dir])
+package = importlib.util.module_from_spec(spec)
+sys.modules["segstats_jsonld"] = package
+spec.loader.exec_module(package)
+from {CONVERTER_MODULE} import main
+got = sys.modules["{CONVERTER_MODULE}"].__file__
+if os.path.realpath(got) != os.path.realpath(want):
+    sys.exit("fs_to_nidm: the conversion would run %s, not %s, which the NIDM input check "
+             "ran" % (got, want))
+sys.argv[0] = "fs_to_nidm"
+sys.exit(main())
+"""
 # The converter's checkout; nidm_conversion puts it on the converter's
 # PYTHONPATH, so it is found there when segstats_jsonld is not installed.
 CONVERTER_DIR = Path(__file__).resolve().parents[1] / "src" / "segstats_jsonld"
@@ -227,16 +272,34 @@ def converter_subject_id(participant_label):
     return f"sub-{participant_label}"
 
 
+def _without_working_directory(paths):
+    """paths without '' and without entries that are the working directory
+    (only without '' when the working directory no longer exists), as
+    CONVERTER_BOOTSTRAP filters the conversion's sys.path."""
+    try:
+        cwd = os.path.realpath(os.getcwd())
+    except OSError:
+        cwd = None
+    return [p for p in paths if p and (cwd is None or os.path.realpath(p) != cwd)]
+
+
 def _import_fs_to_nidm():
+    """Import the converter with the working directory off sys.path for this
+    import (see CONVERTER_BOOTSTRAP); the conversion runs the same file."""
     import importlib
 
+    saved = list(sys.path)
+    sys.path[:] = _without_working_directory(sys.path)
     try:
+        try:
+            return importlib.import_module(CONVERTER_MODULE)
+        except ModuleNotFoundError as err:
+            if err.name != "segstats_jsonld":
+                raise
+        sys.path.append(str(CONVERTER_DIR))
         return importlib.import_module(CONVERTER_MODULE)
-    except ModuleNotFoundError as err:
-        if err.name != "segstats_jsonld":
-            raise
-    sys.path.append(str(CONVERTER_DIR))
-    return importlib.import_module(CONVERTER_MODULE)
+    finally:
+        sys.path[:] = saved
 
 
 def nidm_input_subject_problem(nidm_input_file, participant_label):
@@ -462,11 +525,16 @@ def nidm_conversion(
             existing_outputs = _output_state()
 
             env = os.environ.copy()
+            # The conversion runs the converter file this process imports.
+            env[CONVERTER_FILE_ENV] = os.path.realpath(_import_fs_to_nidm().__file__)
             project_root = Path(__file__).resolve().parents[1]
             existing_pythonpath = env.get("PYTHONPATH")
             pythonpath_entries = [str(project_root), str(project_root / "src"), str(project_root / "src" / "segstats_jsonld")]
             if existing_pythonpath:
-                pythonpath_entries.append(existing_pythonpath)
+                # without empty components: each is the working directory (on
+                # Python 3.12 one also stops the interpreter from starting when
+                # the working directory has been removed)
+                pythonpath_entries += [p for p in existing_pythonpath.split(os.pathsep) if p]
             env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
             env.setdefault("RDFLIB_STORE_NO_BIND_OVERRIDE", "1")
             env.setdefault("SEGSTATS_JSONLD_ALLOW_NEW_KEYS", "1")

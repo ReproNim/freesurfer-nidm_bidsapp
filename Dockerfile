@@ -17,7 +17,10 @@ RUN apt-get update && apt-get install -y \
 # Make license path match BABS mount point
 ENV FS_LICENSE=/SGLR/FREESURFER_HOME/license.txt
 # Only /opt: the base image sets no PYTHONPATH, and `/opt:$PYTHONPATH` would
-# end in an empty entry, which Python reads as the working directory.
+# end in an empty entry, which Python reads as the working directory. This
+# covers the image's own setting only; a PYTHONPATH given with `docker run -e`
+# replaces it. The app drops the working directory from sys.path only around
+# its converter import and in the conversion (src/run.py, CONVERTER_BOOTSTRAP).
 ENV PYTHONPATH=/opt
 ENV PATH=/usr/local/bin:$PATH
 
