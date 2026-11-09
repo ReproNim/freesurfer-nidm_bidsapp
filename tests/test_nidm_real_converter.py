@@ -304,10 +304,11 @@ def test_conversion_logs_the_pynidm_it_loaded(tmp_path, with_input_nidm):
     assert "fs_to_nidm.py" in lines[0], lines
 
 
-def test_logged_command_replays_the_conversion(tmp_path):
+def test_logged_command_replays_the_conversion(tmp_path, monkeypatch):
     """The "Running command:" line is logged for replay. The conversion needs
     FREESURFER_NIDM_CONVERTER_FILE and the PYTHONPATH the app sets, so the
-    line must carry them: run through bash as logged, it converts again."""
+    line must carry them: run through bash as logged, it converts again. The
+    host PYTHONPATH holds a space, a quote and a $, so the line must quote it."""
     import logging
     import os
     import shlex
@@ -315,6 +316,10 @@ def test_logged_command_replays_the_conversion(tmp_path):
 
     from src.run import CONVERTER_FILE_ENV
 
+    odd_dir = tmp_path / "host lib's $HOME"
+    odd_dir.mkdir()
+    host_pythonpath = os.environ.get("PYTHONPATH")
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, [host_pythonpath, str(odd_dir)])))
     out = tmp_path / "out"
     recon_all_tree(out)
     records = []
@@ -334,6 +339,9 @@ def test_logged_command_replays_the_conversion(tmp_path):
     assert len(logged) == 1, logged
     words = shlex.split(logged[0])
     assert any(w.startswith(CONVERTER_FILE_ENV + "=") for w in words), words
+    logged_pythonpath = [w.split("=", 1)[1] for w in words if w.startswith("PYTHONPATH=")]
+    assert len(logged_pythonpath) == 1, words
+    assert str(odd_dir) in logged_pythonpath[0].split(os.pathsep), logged_pythonpath
 
     subject_dir = out / "sub-001"
     for f in subject_dir.glob("*_nidm.jsonld"):

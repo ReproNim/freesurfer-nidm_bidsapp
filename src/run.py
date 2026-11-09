@@ -633,10 +633,17 @@ def nidm_conversion(
 
             # Log the command for debugging and replay: shell-quoted, with the
             # environment it needs that the app sets, so the line runs as-is
-            # in a POSIX shell (with an input NIDM, the -n file is a temporary
-            # copy that does not outlive the run).
+            # in a POSIX shell. With an input NIDM the -n file is a temporary
+            # copy that does not outlive the run, and the log says how to
+            # recreate it.
             replay_env = [f"{key}={shlex.quote(env[key])}" for key in (CONVERTER_FILE_ENV, "PYTHONPATH")]
             logger.info(f"Running command: {' '.join(replay_env)} {shlex.join(cmd)}")
+            if copied_nidm:
+                logger.info(
+                    f"The -n file {copied_nidm} is a temporary copy of {existing_nidm_file} that "
+                    f"is removed after the conversion; to rerun the command, copy the input "
+                    f"there first"
+                )
 
             result = subprocess.run(cmd, capture_output=True, text=True, env=env)
             for line in result.stdout.splitlines():
