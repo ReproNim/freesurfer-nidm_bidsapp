@@ -513,9 +513,8 @@ class TestNIDMAppendCommand:
 
     def test_converter_warnings_reach_the_log(self, tmp_path, caplog):
         stderr = ("A newer version (4.5.6) of incf-nidash/pynidm is available.\n"
-                  "/x/fs_to_nidm.py:369: UserWarning: 3 anatomical AcquisitionObjects found for subject "
-                  "sub-001; the stats are not linked to an acquisition\n"
-                  "  warnings.warn(\n")
+                  "UserWarning: 3 anatomical AcquisitionObjects found for subject "
+                  "sub-001; the stats are not linked to an acquisition\n")
         with caplog.at_level("WARNING"):
             self._append(tmp_path, [], stderr=stderr)
         assert "fs_to_nidm: 3 anatomical AcquisitionObjects found" in caplog.text
@@ -523,7 +522,9 @@ class TestNIDMAppendCommand:
         # line, so a message the relay does not recognise still reaches the log.
         warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert "fs_to_nidm: A newer version (4.5.6) of incf-nidash/pynidm is available." in warnings
-        assert "fs_to_nidm: warnings.warn(" in warnings
+        assert "fs_to_nidm: 3 anatomical AcquisitionObjects found for subject sub-001; the stats are " \
+            "not linked to an acquisition" in warnings
+        assert len([w for w in warnings if w.startswith("fs_to_nidm: ")]) == 2, warnings
 
     def test_converter_stderr_without_userwarning_reaches_the_log(self, tmp_path, caplog):
         stderr = "The input NIDM has no subject agents; adding a new agent for sub-001 (--forcenidm)\n"

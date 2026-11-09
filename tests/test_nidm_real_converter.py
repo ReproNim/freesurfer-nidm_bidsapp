@@ -232,3 +232,35 @@ def test_checked_out_converter_accepts_the_argv_with_an_input_nidm(tmp_path):
 def test_checked_out_converter_accepts_the_argv_without_an_input_nidm(tmp_path):
     args = _parse_with_checked_out_converter(tmp_path, with_input_nidm=False)
     assert args.nidm_file is None and args.jsonld and args.subjid == "sub-001"
+
+
+def test_each_converter_warning_is_logged_once(tmp_path):
+    """Python prints a warning as two lines, `file:line: UserWarning: msg`
+    and the source line, and the app logs every stderr line, so each
+    converter warning was logged twice, the second time as code with raw
+    `{subjid}` placeholders. The conversion prints warnings as one line."""
+    import logging
+
+    nidm_in = tmp_path / "NIDM" / "sub-001"
+    nidm_in.mkdir(parents=True)
+    # a project and no subjects: --forcenidm adds the subject, with a warning;
+    # -acq_filename names a T1w the input does not have, with another
+    (nidm_in / "nidm.ttl").write_text(
+        "@prefix nidm: <http://purl.org/nidash/nidm#> .\n"
+        "@prefix prov: <http://www.w3.org/ns/prov#> .\n"
+        "<http://iri.nidash.org/project> a nidm:Project, prov:Activity .\n")
+    out = tmp_path / "out"
+    recon_all_tree(out)
+    records = []
+    handler = logging.Handler(level=logging.WARNING)
+    handler.emit = records.append
+    app_logger = logging.getLogger("freesurfer-nidm")
+    app_logger.addHandler(handler)
+    try:
+        convert(out, nidm_input_dir=tmp_path / "NIDM")
+    finally:
+        app_logger.removeHandler(handler)
+    relayed = [r.getMessage() for r in records if r.getMessage().startswith("fs_to_nidm: ")]
+    assert any("which has no subjects" in m for m in relayed), relayed
+    assert not any("warnings.warn(" in m or "{subjid}" in m or "{want}" in m for m in relayed), relayed
+    assert len(relayed) == len(set(relayed)), relayed

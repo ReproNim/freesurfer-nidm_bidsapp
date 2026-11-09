@@ -265,7 +265,9 @@ try:
 except OSError:
     cwd = None
 sys.path[:] = [p for p in sys.path if p and (cwd is None or os.path.realpath(p) != cwd)]
-import importlib.util
+import importlib.util, warnings
+# one line per warning, without the source line Python prints after it
+warnings.formatwarning = lambda message, category, *args, **kwargs: "%s: %s\\n" % (category.__name__, message)
 want = os.environ.get("{CONVERTER_FILE_ENV}", "")
 package_dir = os.path.dirname(want)
 init = os.path.join(package_dir, "__init__.py")
@@ -630,7 +632,8 @@ def nidm_conversion(
     # fs_to_nidm reports a run it completed with reduced provenance (stats left
     # unlinked to an acquisition, a new subject agent under --forcenidm) only on
     # stderr, so every stderr line of a successful run is logged as a warning.
-    # A Python warning is logged by its message, without the file:line prefix.
+    # A Python warning is logged by its message: the bootstrap prints each as
+    # one line, "<Category>: <message>", without the source line.
     for line in result.stderr.splitlines():
         line = line.strip()
         if not line:
