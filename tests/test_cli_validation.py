@@ -447,7 +447,9 @@ class TestNIDMInputPreflight:
         a_file.chmod(0o755)
         cases = ((tmp_path / "absent", "does not exist"),
                  (a_file, "is a file"),
-                 ("", "must not be empty"))
+                 ("", "must not be empty"),
+                 # click's file_okay check only catches regular files.
+                 ("/dev/null", "is not a directory"))
         for bad, message in cases:
             for extra in ((), ('--skip-nidm',)):
                 result, mock_wrapper = self._invoke(
@@ -460,8 +462,8 @@ class TestNIDMInputPreflight:
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root can search any directory")
     def test_unsearchable_explicit_input_dir_is_a_usage_error(self, tmp_path, bids_single_session):
-        """r-- passes click's readable check, but the per-subject lookup needs
-        search permission and would raise PermissionError mid-run."""
+        """An r-- directory can be listed but not searched, and the per-subject
+        lookup needs search permission: it would raise PermissionError mid-run."""
         locked = tmp_path / "read_only_nidm"
         locked.mkdir(mode=0o444)
         try:
