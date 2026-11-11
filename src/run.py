@@ -716,8 +716,20 @@ def process_session(
     return 0
 
 
+def _has_no_entries(path):
+    """True if the directory lists no entries. One that cannot be listed
+    counts as not empty: the NIDM lookup never lists it, so it needs only
+    search permission."""
+    try:
+        with os.scandir(path) as entries:
+            return next(entries, None) is None
+    except PermissionError:
+        return False
+
+
 class _NonEmptyPath(click.Path):
-    """click.Path that also rejects an empty value and an unsearchable directory.
+    """click.Path that also rejects an empty value, an unsearchable directory
+    and a directory with no entries.
 
     With resolve_path, "" (an unset variable in a wrapper) would resolve to the
     current directory, which can hold a previous run's output. The NIDM lookup
@@ -742,6 +754,16 @@ class _NonEmptyPath(click.Path):
             self.fail(f"{rv!r} is not a directory", param, ctx)
         if not os.access(rv, os.X_OK):
             self.fail(f"{rv!r} is not searchable", param, ctx)
+        # A directory with no entries at all holds no input for any subject:
+        # usually an uninstalled datalad subdataset or an empty mount.
+        try:
+            is_empty = _has_no_entries(rv)
+        except OSError as e:
+            self.fail(f"{rv!r} cannot be accessed: {e.strerror}", param, ctx)
+        if is_empty:
+            self.fail(f"{rv!r} is empty (if it is a datalad subdataset, install it "
+                      "with 'datalad get -n'; when running in a container, check "
+                      "that the right directory is mounted)", param, ctx)
         return rv
 
 
@@ -786,7 +808,7 @@ class _NonEmptyPath(click.Path):
     # default (<bids_dir>/../NIDM, what BABS relies on) may still be absent.
     type=_NonEmptyPath(exists=True, file_okay=False, readable=False, resolve_path=True),
     default=None,
-    help="Path to an existing NIDM files directory (must exist and be searchable if given). Defaults to <bids_dir>/../NIDM for BABS workflows.",
+    help="Path to an existing NIDM files directory (must exist, be searchable and not be empty if given). Defaults to <bids_dir>/../NIDM for BABS workflows.",
 )
 @click.option(
     "--max-voxel-size",

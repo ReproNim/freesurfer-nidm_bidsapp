@@ -508,12 +508,26 @@ class TestNIDMInputPreflight:
         assert result.exit_code == 0, result.output
         mock_wrapper.return_value.process_subject.assert_called_once()
 
-    def test_empty_explicit_input_dir_is_accepted(self, tmp_path, bids_single_session):
+    def test_empty_explicit_input_dir_is_a_usage_error(self, tmp_path, bids_single_session):
+        """No entries at all: an uninstalled datalad subdataset or an empty
+        mount, which would build every subject's NIDM without its input."""
         empty = tmp_path / "empty_nidm"
         empty.mkdir()
         result, mock_wrapper = self._invoke(
             bids_single_session, tmp_path / "out", 'participant',
-            '--skip-nidm', '--nidm-input-dir', str(empty))
+            '--nidm-input-dir', str(empty))
+        assert result.exit_code == 2, result.output
+        assert "is empty" in result.output, result.output
+        assert "datalad get -n" in result.output, result.output
+        mock_wrapper.assert_not_called()
+
+    def test_input_dir_with_any_entry_is_accepted(self, tmp_path, bids_single_session):
+        """Any entry counts, even one the lookup would not use for this subject."""
+        nidm = tmp_path / "nidm"
+        (nidm / "sub-02").mkdir(parents=True)
+        result, mock_wrapper = self._invoke(
+            bids_single_session, tmp_path / "out", 'participant',
+            '--skip-nidm', '--nidm-input-dir', str(nidm))
         assert result.exit_code == 0, result.output
         mock_wrapper.return_value.process_subject.assert_called_once()
 
