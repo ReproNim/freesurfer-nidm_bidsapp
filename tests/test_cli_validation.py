@@ -443,13 +443,19 @@ class TestNIDMInputPreflight:
         value (an unset wrapper variable, which would resolve to the cwd)."""
         a_file = tmp_path / "nidm.ttl"
         a_file.write_text("")
-        for bad in (tmp_path / "absent", a_file, ""):
+        # Executable, so only the directory check can reject it.
+        a_file.chmod(0o755)
+        cases = ((tmp_path / "absent", "does not exist"),
+                 (a_file, "is a file"),
+                 ("", "must not be empty"))
+        for bad, message in cases:
             for extra in ((), ('--skip-nidm',)):
                 result, mock_wrapper = self._invoke(
                     bids_single_session, tmp_path / "out", 'participant',
                     *extra, '--nidm-input-dir', str(bad))
                 assert result.exit_code == 2, result.output
                 assert "--nidm-input-dir" in result.output
+                assert message in result.output, result.output
                 mock_wrapper.assert_not_called()
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root can search any directory")
@@ -467,6 +473,38 @@ class TestNIDMInputPreflight:
         assert result.exit_code == 2, result.output
         assert "not searchable" in result.output
         mock_wrapper.assert_not_called()
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can search any directory")
+    def test_input_dir_under_an_unsearchable_parent_names_the_cause(self, tmp_path, bids_single_session):
+        """click reports any stat() failure as "does not exist", which sends an
+        operator after a typo when the problem is a permission."""
+        locked = tmp_path / "locked"
+        locked.mkdir(mode=0)
+        try:
+            result, mock_wrapper = self._invoke(
+                bids_single_session, tmp_path / "out", 'participant',
+                '--nidm-input-dir', str(locked / "NIDM"))
+        finally:
+            locked.chmod(0o700)
+        assert result.exit_code == 2, result.output
+        assert "cannot be accessed: Permission denied" in result.output, result.output
+        mock_wrapper.assert_not_called()
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can search any directory")
+    def test_search_only_input_dir_is_accepted(self, tmp_path, bids_single_session):
+        """The lookup stats fixed candidate paths and never lists the
+        directory, so search permission alone is enough."""
+        search_only = tmp_path / "search_only_nidm"
+        search_only.mkdir()
+        search_only.chmod(0o100)
+        try:
+            result, mock_wrapper = self._invoke(
+                bids_single_session, tmp_path / "out", 'participant',
+                '--skip-nidm', '--nidm-input-dir', str(search_only))
+        finally:
+            search_only.chmod(0o700)
+        assert result.exit_code == 0, result.output
+        mock_wrapper.return_value.process_subject.assert_called_once()
 
     def test_empty_explicit_input_dir_is_accepted(self, tmp_path, bids_single_session):
         empty = tmp_path / "empty_nidm"

@@ -6,6 +6,7 @@ This BIDS App runs FreeSurfer's recon-all pipeline on T1w and optionally T2w ima
 from a BIDS dataset and outputs both standard FreeSurfer results and NIDM format results.
 """
 
+import errno
 import logging
 import os
 import shutil
@@ -719,14 +720,26 @@ class _NonEmptyPath(click.Path):
     """click.Path that also rejects an empty value and an unsearchable directory.
 
     With resolve_path, "" (an unset variable in a wrapper) would resolve to the
-    current directory, which can hold a previous run's output. click's readable
-    check is R_OK only; without X_OK the NIDM lookup raises PermissionError.
+    current directory, which can hold a previous run's output. The NIDM lookup
+    only stats fixed candidate paths and never lists the directory, so search
+    permission (X_OK) is what it needs; without it the lookup raises
+    PermissionError mid-run.
     """
 
     def convert(self, value, param, ctx):
         if isinstance(value, str) and not value.strip():
             self.fail("must not be empty", param, ctx)
+        # click reports every stat() failure as "does not exist"; name the
+        # real cause when it is something else, such as a parent directory
+        # without search permission.
+        try:
+            os.stat(value)
+        except OSError as e:
+            if e.errno not in (errno.ENOENT, errno.ENOTDIR):
+                self.fail(f"{value!r} cannot be accessed: {e.strerror}", param, ctx)
         rv = super().convert(value, param, ctx)
+        if not os.path.isdir(rv):
+            self.fail(f"{rv!r} is not a directory", param, ctx)
         if not os.access(rv, os.X_OK):
             self.fail(f"{rv!r} is not searchable", param, ctx)
         return rv
@@ -771,9 +784,9 @@ class _NonEmptyPath(click.Path):
     # exists=True: an explicit directory that is not there is a typo or a
     # missing mount, so it is a usage error before any processing. The
     # default (<bids_dir>/../NIDM, what BABS relies on) may still be absent.
-    type=_NonEmptyPath(exists=True, file_okay=False, resolve_path=True),
+    type=_NonEmptyPath(exists=True, file_okay=False, readable=False, resolve_path=True),
     default=None,
-    help="Path to an existing NIDM files directory (must exist if given). Defaults to <bids_dir>/../NIDM for BABS workflows.",
+    help="Path to an existing NIDM files directory (must exist and be searchable if given). Defaults to <bids_dir>/../NIDM for BABS workflows.",
 )
 @click.option(
     "--max-voxel-size",
