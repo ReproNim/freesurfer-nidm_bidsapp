@@ -2,11 +2,12 @@
 click>=8.0.0
 pybids>=0.15.1
 pytest>=7.0.0
-rdflib~=6.3.2
-pynidm==4.5.0
-# PyNIDM 4.5.0 adds an oxigraph-backed rdflib store; pinned explicitly so the
-# runtime dep is visible. Requires rdflib<8 (see build files' rdflib upgrade).
+# PyNIDM 5.0.0 declares rdflib>=6.3.2,<8 and oxrdflib~=0.5.0 (oxrdflib itself
+# requires rdflib<8). The lower bound is the current rdflib release.
+rdflib>=7.6.0,<8
+pynidm==5.0.0
 oxrdflib~=0.5.0
-# prov 3.0.0 moved NetworkX graph interop to the optional "graph" extra; pynidm's
-# nidm.experiment modules import prov.graph, so the extra (networkx) is required.
-prov[graph]
+# PyNIDM 5 no longer depends on prov, but the converter in src/segstats_jsonld
+# imports prov.model, so it stays a direct dependency. The "graph" extra was
+# only needed by PyNIDM 4.x's nidm.experiment modules.
+prov
