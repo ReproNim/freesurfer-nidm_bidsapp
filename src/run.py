@@ -6,6 +6,7 @@ This BIDS App runs FreeSurfer's recon-all pipeline on T1w and optionally T2w ima
 from a BIDS dataset and outputs both standard FreeSurfer results and NIDM format results.
 """
 
+import errno
 import logging
 import os
 import shutil
@@ -59,16 +60,14 @@ def initialize(bids_dir, freesurfer_license, output_dir, skip_bids_validation, v
     bids_dir = Path(bids_dir)
 
     # Use CLI argument if provided, otherwise default to BABS location
-    explicit_nidm_input_dir = nidm_input_dir is not None
     if nidm_input_dir is None:
         nidm_input_dir = bids_dir.parent / "NIDM"
     else:
         nidm_input_dir = Path(nidm_input_dir)
 
+    # The CLI already rejected a missing explicit --nidm-input-dir; only the
+    # default location can be absent here.
     if not nidm_input_dir.exists():
-        if explicit_nidm_input_dir:
-            logger.warning(f"--nidm-input-dir {nidm_input_dir} does not exist; "
-                           "NIDM will be built without an input document")
         nidm_input_dir = None
 
     # Per-subject output layout (study-wide standard): everything an app produces
@@ -717,6 +716,58 @@ def process_session(
     return 0
 
 
+def _has_no_entries(path):
+    """True if the directory lists no entries. One that cannot be listed
+    counts as not empty: the NIDM lookup never lists it, so it needs only
+    search permission."""
+    try:
+        with os.scandir(path) as entries:
+            return next(entries, None) is None
+    except PermissionError:
+        return False
+
+
+class _NonEmptyPath(click.Path):
+    """click.Path that also rejects an empty value, an unsearchable directory
+    and a directory with no entries.
+
+    With resolve_path, "" (an unset variable in a wrapper) would resolve to the
+    current directory, which can hold a previous run's output. The NIDM lookup
+    only stats fixed candidate paths and never lists the directory, so search
+    permission (X_OK) is what it needs; without it the lookup raises
+    PermissionError mid-run.
+    """
+
+    def convert(self, value, param, ctx):
+        if isinstance(value, str) and not value.strip():
+            self.fail("must not be empty", param, ctx)
+        # click reports every stat() failure as "does not exist"; name the
+        # real cause when it is something else, such as a parent directory
+        # without search permission.
+        try:
+            os.stat(value)
+        except OSError as e:
+            if e.errno not in (errno.ENOENT, errno.ENOTDIR):
+                self.fail(f"{value!r} cannot be accessed: {e.strerror}", param, ctx)
+        rv = super().convert(value, param, ctx)
+        if not os.path.isdir(rv):
+            self.fail(f"{rv!r} is not a directory", param, ctx)
+        if not os.access(rv, os.X_OK):
+            self.fail(f"{rv!r} is not searchable", param, ctx)
+        # A directory with no entries at all holds no input for any subject:
+        # usually an uninstalled datalad subdataset or an empty mount.
+        try:
+            is_empty = _has_no_entries(rv)
+        except OSError as e:
+            self.fail(f"{rv!r} cannot be accessed: {e.strerror}", param, ctx)
+        if is_empty:
+            self.fail(f"{rv!r} is empty (if it is a datalad subdataset that was never "
+                      "installed, 'datalad get -n' installs it and 'datalad get' fetches "
+                      "the NIDM files; when running in a container, check that the right "
+                      "directory is mounted)", param, ctx)
+        return rv
+
+
 @click.command()
 @click.version_option(version=__version__)
 @click.argument("bids_dir", type=click.Path(exists=True, file_okay=False, resolve_path=True))
@@ -753,9 +804,12 @@ def process_session(
 @click.option("--skip_nidm", "--skip-nidm", is_flag=True, help="Skip NIDM output generation.")
 @click.option(
     "--nidm-input-dir",
-    type=click.Path(exists=False, file_okay=False, resolve_path=True),
+    # exists=True: an explicit directory that is not there is a typo or a
+    # missing mount, so it is a usage error before any processing. The
+    # default (<bids_dir>/../NIDM, what BABS relies on) may still be absent.
+    type=_NonEmptyPath(exists=True, file_okay=False, readable=False, resolve_path=True),
     default=None,
-    help="Path to existing NIDM files directory. Defaults to <bids_dir>/../NIDM for BABS workflows.",
+    help="Path to an existing NIDM files directory (must exist, be searchable and not be empty if given). Defaults to <bids_dir>/../NIDM for BABS workflows.",
 )
 @click.option(
     "--max-voxel-size",

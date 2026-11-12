@@ -436,15 +436,104 @@ class TestNIDMInputPreflight:
         assert result.exit_code == 0, result.output
         mock_wrapper.return_value.process_subject.assert_called_once()
 
-    def test_missing_explicit_input_dir_is_a_warning(self, tmp_path, bids_single_session, caplog):
-        import logging
+    def test_missing_explicit_input_dir_is_a_usage_error(self, tmp_path, bids_single_session):
+        """An explicit directory that is not there used to warn and build NIDM
+        without the input; it is now rejected before any processing, also
+        under --skip-nidm, and so is a file given in its place or an empty
+        value (an unset wrapper variable, which would resolve to the cwd)."""
+        a_file = tmp_path / "nidm.ttl"
+        a_file.write_text("")
+        # Executable, so only the directory check can reject it.
+        a_file.chmod(0o755)
+        cases = ((tmp_path / "absent", "does not exist"),
+                 (a_file, "is a file"),
+                 ("", "must not be empty"),
+                 # click's file_okay check only catches regular files.
+                 ("/dev/null", "is not a directory"))
+        for bad, message in cases:
+            for extra in ((), ('--skip-nidm',)):
+                result, mock_wrapper = self._invoke(
+                    bids_single_session, tmp_path / "out", 'participant',
+                    *extra, '--nidm-input-dir', str(bad))
+                assert result.exit_code == 2, result.output
+                assert "--nidm-input-dir" in result.output
+                assert message in result.output, result.output
+                mock_wrapper.assert_not_called()
 
-        with caplog.at_level(logging.WARNING, logger="freesurfer-nidm"):
-            result, _ = self._invoke(
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can search any directory")
+    def test_unsearchable_explicit_input_dir_is_a_usage_error(self, tmp_path, bids_single_session):
+        """An r-- directory can be listed but not searched, and the per-subject
+        lookup needs search permission: it would raise PermissionError mid-run."""
+        locked = tmp_path / "read_only_nidm"
+        locked.mkdir(mode=0o444)
+        try:
+            result, mock_wrapper = self._invoke(
                 bids_single_session, tmp_path / "out", 'participant',
-                '--skip-nidm', '--nidm-input-dir', str(tmp_path / "absent"))
+                '--nidm-input-dir', str(locked))
+        finally:
+            locked.chmod(0o700)
+        assert result.exit_code == 2, result.output
+        assert "not searchable" in result.output
+        mock_wrapper.assert_not_called()
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can search any directory")
+    def test_input_dir_under_an_unsearchable_parent_names_the_cause(self, tmp_path, bids_single_session):
+        """click reports any stat() failure as "does not exist", which sends an
+        operator after a typo when the problem is a permission."""
+        locked = tmp_path / "locked"
+        locked.mkdir(mode=0)
+        try:
+            result, mock_wrapper = self._invoke(
+                bids_single_session, tmp_path / "out", 'participant',
+                '--nidm-input-dir', str(locked / "NIDM"))
+        finally:
+            locked.chmod(0o700)
+        assert result.exit_code == 2, result.output
+        assert "cannot be accessed: Permission denied" in result.output, result.output
+        mock_wrapper.assert_not_called()
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can search any directory")
+    def test_search_only_input_dir_is_accepted(self, tmp_path, bids_single_session):
+        """The lookup stats fixed candidate paths and never lists the
+        directory, so search permission alone is enough."""
+        search_only = tmp_path / "search_only_nidm"
+        search_only.mkdir()
+        search_only.chmod(0o100)
+        try:
+            result, mock_wrapper = self._invoke(
+                bids_single_session, tmp_path / "out", 'participant',
+                '--skip-nidm', '--nidm-input-dir', str(search_only))
+        finally:
+            search_only.chmod(0o700)
         assert result.exit_code == 0, result.output
-        assert any("does not exist" in r.getMessage() for r in caplog.records)
+        mock_wrapper.return_value.process_subject.assert_called_once()
+
+    def test_empty_explicit_input_dir_is_a_usage_error(self, tmp_path, bids_single_session):
+        """No entries at all: an uninstalled datalad subdataset or an empty
+        mount, which would build every subject's NIDM without its input."""
+        empty = tmp_path / "empty_nidm"
+        empty.mkdir()
+        result, mock_wrapper = self._invoke(
+            bids_single_session, tmp_path / "out", 'participant',
+            '--nidm-input-dir', str(empty))
+        assert result.exit_code == 2, result.output
+        assert "is empty" in result.output, result.output
+        # Installing the subdataset is not enough: its files have no content
+        # until they are fetched, so the message names both steps.
+        output = " ".join(result.output.split())
+        assert "'datalad get -n' installs it" in output, result.output
+        assert "'datalad get' fetches" in output, result.output
+        mock_wrapper.assert_not_called()
+
+    def test_input_dir_with_any_entry_is_accepted(self, tmp_path, bids_single_session):
+        """Any entry counts, even one the lookup would not use for this subject."""
+        nidm = tmp_path / "nidm"
+        (nidm / "sub-02").mkdir(parents=True)
+        result, mock_wrapper = self._invoke(
+            bids_single_session, tmp_path / "out", 'participant',
+            '--skip-nidm', '--nidm-input-dir', str(nidm))
+        assert result.exit_code == 0, result.output
+        mock_wrapper.return_value.process_subject.assert_called_once()
 
 
 class TestSkipFreesurferUsesRecordedInputs:
