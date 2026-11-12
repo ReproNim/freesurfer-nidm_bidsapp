@@ -518,7 +518,11 @@ class TestNIDMInputPreflight:
             '--nidm-input-dir', str(empty))
         assert result.exit_code == 2, result.output
         assert "is empty" in result.output, result.output
-        assert "datalad get -n" in result.output, result.output
+        # Installing the subdataset is not enough: its files have no content
+        # until they are fetched, so the message names both steps.
+        output = " ".join(result.output.split())
+        assert "'datalad get -n' installs it" in output, result.output
+        assert "'datalad get' fetches" in output, result.output
         mock_wrapper.assert_not_called()
 
     def test_input_dir_with_any_entry_is_accepted(self, tmp_path, bids_single_session):

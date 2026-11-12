@@ -761,9 +761,10 @@ class _NonEmptyPath(click.Path):
         except OSError as e:
             self.fail(f"{rv!r} cannot be accessed: {e.strerror}", param, ctx)
         if is_empty:
-            self.fail(f"{rv!r} is empty (if it is a datalad subdataset, install it "
-                      "with 'datalad get -n'; when running in a container, check "
-                      "that the right directory is mounted)", param, ctx)
+            self.fail(f"{rv!r} is empty (if it is a datalad subdataset that was never "
+                      "installed, 'datalad get -n' installs it and 'datalad get' fetches "
+                      "the NIDM files; when running in a container, check that the right "
+                      "directory is mounted)", param, ctx)
         return rv
 
 
