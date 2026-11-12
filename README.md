@@ -119,7 +119,7 @@ apptainer run \
 - Optional arguments:
   - `--participant-label`: One participant label, with or without the `sub-` prefix.
   - `--session-label`: One session label, with or without the `ses-` prefix. It is accepted in participant mode for BABS session-wise jobs.
-  - `--fs-license-file`: Path to the FreeSurfer license file. It must be a file: a directory is a usage error.
+  - `--fs-license-file`: Path to the FreeSurfer license file. A directory given here is a usage error.
   - `--skip-bids-validation`: Skip PyBIDS validation.
   - `--skip-freesurfer`: Reuse a completed `recon-all` directory and run only the remaining export steps. The directory is checked against the images it was made from; see [Reusing an existing reconstruction](#reusing-an-existing-reconstruction).
   - `--skip-nidm`: Skip NIDM output generation.

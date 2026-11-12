@@ -307,15 +307,14 @@ class TestEmptyPathArguments:
         return result, mock_wrapper
 
     @pytest.mark.parametrize("empty", ["", " "])
-    def test_empty_bids_dir_is_a_usage_error(self, tmp_path, bids_single_session, cwd, empty):
+    def test_empty_bids_dir_is_a_usage_error(self, tmp_path, bids_single_session, empty):
         """An empty value (an unset variable in a wrapper script) resolved to
         the current directory, which was then read as the dataset."""
         result, mock_wrapper = self._invoke(empty, tmp_path / "out")
         assert result.exit_code == 2, result.output
-        assert "BIDS_DIR" in result.output, result.output
-        assert "must not be empty" in result.output, result.output
+        assert "Invalid value for 'BIDS_DIR': must not be empty" in result.output, result.output
         mock_wrapper.assert_not_called()
-        assert os.listdir(cwd) == []
+        assert not (tmp_path / "out").exists()
 
     @pytest.mark.parametrize("empty", ["", " "])
     def test_empty_output_dir_is_a_usage_error(self, tmp_path, bids_single_session, cwd, empty):
@@ -323,13 +322,12 @@ class TestEmptyPathArguments:
         its derivatives into wherever the job started and exited 0."""
         result, mock_wrapper = self._invoke(bids_single_session, empty)
         assert result.exit_code == 2, result.output
-        assert "OUTPUT_DIR" in result.output, result.output
-        assert "must not be empty" in result.output, result.output
+        assert "Invalid value for 'OUTPUT_DIR': must not be empty" in result.output, result.output
         mock_wrapper.assert_not_called()
         assert os.listdir(cwd) == []
 
     @pytest.mark.parametrize("empty", ["", " "])
-    def test_empty_license_file_is_a_usage_error(self, tmp_path, bids_single_session, cwd, empty):
+    def test_empty_license_file_is_a_usage_error(self, tmp_path, bids_single_session, empty):
         """An empty value resolved to the current directory, which exists, so
         a directory was passed on as the license."""
         result, mock_wrapper = self._invoke(
@@ -338,9 +336,9 @@ class TestEmptyPathArguments:
         assert "--fs-license-file" in result.output, result.output
         assert "must not be empty" in result.output, result.output
         mock_wrapper.assert_not_called()
-        assert os.listdir(cwd) == []
+        assert not (tmp_path / "out").exists()
 
-    def test_directory_as_license_file_is_a_usage_error(self, tmp_path, bids_single_session, cwd):
+    def test_directory_as_license_file_is_a_usage_error(self, tmp_path, bids_single_session):
         """A directory is not a license. Docker creates one at the mount point
         when the license path on the host does not exist."""
         license_dir = tmp_path / "license.txt"
@@ -351,17 +349,17 @@ class TestEmptyPathArguments:
         assert "--fs-license-file" in result.output, result.output
         assert "is a directory" in result.output, result.output
         mock_wrapper.assert_not_called()
-        assert os.listdir(cwd) == []
+        assert not (tmp_path / "out").exists()
 
-    def test_license_file_is_passed_to_the_wrapper(self, tmp_path, bids_single_session, cwd):
-        """A regular file is still accepted and reaches the wrapper resolved."""
-        license_file = tmp_path / "license.txt"
-        license_file.write_text("license")
+    def test_relative_license_file_reaches_the_wrapper_resolved(self, tmp_path, bids_single_session, cwd):
+        """A regular file is still accepted, and a relative path reaches the
+        wrapper resolved against the working directory."""
+        (cwd / "license.txt").write_text("license")
         result, mock_wrapper = self._invoke(
-            bids_single_session, tmp_path / "out", '--fs-license-file', str(license_file))
+            bids_single_session, tmp_path / "out", '--fs-license-file', "license.txt")
         assert result.exit_code == 0, result.output
         args, kwargs = mock_wrapper.call_args
-        assert str(license_file.resolve()) in [str(a) for a in (*args, *kwargs.values())]
+        assert str((cwd / "license.txt").resolve()) in [str(a) for a in (*args, *kwargs.values())]
 
     def test_relative_paths_still_resolve_against_the_working_directory(self, tmp_path, bids_single_session, cwd):
         """Only an empty value is refused: "." and other relative paths keep
