@@ -252,11 +252,17 @@ class FreeSurferWrapper:
             ]
 
             for loc in license_locations:
-                # Docker creates a directory at the mount point when the
-                # license path on the host does not exist.
+                # A directory here means a license was meant to be supplied
+                # and was not: "docker run -v" creates one at the mount point
+                # when the license path on the host does not exist. Stop
+                # rather than go on to a later location, which in the image
+                # is the license bundled with FreeSurfer.
                 if os.path.isdir(loc):
-                    logger.warning(f"Ignoring {loc} as a FreeSurfer license: it is a directory")
-                    continue
+                    logger.error(f"FreeSurfer license location {loc} is a directory, not a file")
+                    raise IsADirectoryError(
+                        f"FreeSurfer license location {loc} is a directory, not a file "
+                        "(a Docker -v mount creates one when the host path does not exist)"
+                    )
                 if os.path.exists(loc):
                     logger.info(f"Using FreeSurfer license from {loc}")
                     os.environ["FS_LICENSE"] = loc

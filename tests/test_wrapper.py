@@ -407,48 +407,51 @@ def _layout(anat, t1w, t2w=()):
 
 @pytest.fixture
 def license_fallback(tmp_path, monkeypatch):
-    """A FREESURFER_HOME and a home directory for the license fallback, with
-    the variables the wrapper sets restored afterwards."""
+    """A FREESURFER_HOME and a home directory for the license fallback. The
+    variables the wrapper writes are unset for the test and put back after."""
     fs_home = tmp_path / "fs_home"
     home = tmp_path / "home"
     fs_home.mkdir()
     home.mkdir()
     monkeypatch.setenv("FREESURFER_HOME", str(fs_home))
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("FS_LICENSE", raising=False)
-    monkeypatch.delenv("SUBJECTS_DIR", raising=False)
+    for name in ("FS_LICENSE", "SUBJECTS_DIR"):
+        # setenv first: delenv alone records nothing for a variable that is
+        # not set, and the wrapper's own write would then outlive the test.
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
     return fs_home, home
 
 
 @pytest.mark.skipif(os.path.lexists("/license.txt"), reason="/license.txt is the first fallback location")
-def test_license_fallback_skips_a_directory(bids_dataset, output_dir, license_fallback, caplog):
+def test_license_fallback_stops_at_a_directory(bids_dataset, output_dir, license_fallback):
     """A directory where a license is expected (Docker makes one for a mount
-    whose host path does not exist) is not taken as the license."""
+    whose host path does not exist) is an error, and a later location is not
+    used in its place."""
     fs_home, home = license_fallback
     (fs_home / "license.txt").mkdir()
     (home / ".freesurfer.txt").write_text("dummy license")
-    with caplog.at_level("WARNING"):
+    with pytest.raises(IsADirectoryError) as error:
         FreeSurferWrapper(str(bids_dataset), str(output_dir))
-    assert os.environ["FS_LICENSE"] == str(home / ".freesurfer.txt")
-    assert f"Ignoring {fs_home / 'license.txt'}" in caplog.text
-
-
-@pytest.mark.skipif(os.path.lexists("/license.txt"), reason="/license.txt is the first fallback location")
-def test_license_fallback_with_only_a_directory_fails(bids_dataset, output_dir, license_fallback):
-    fs_home, home = license_fallback
-    (fs_home / "license.txt").mkdir()
-    with pytest.raises(FileNotFoundError, match="license not found"):
-        FreeSurferWrapper(str(bids_dataset), str(output_dir))
+    assert f"{fs_home / 'license.txt'} is a directory" in str(error.value)
     assert "FS_LICENSE" not in os.environ
 
 
 @pytest.mark.skipif(os.path.lexists("/license.txt"), reason="/license.txt is the first fallback location")
-def test_license_fallback_uses_a_file(bids_dataset, output_dir, license_fallback):
+def test_license_fallback_uses_the_first_file(bids_dataset, output_dir, license_fallback):
+    """The first location that is a file wins; later locations are not looked at."""
     fs_home, home = license_fallback
     (fs_home / "license.txt").write_text("dummy license")
-    (home / ".freesurfer.txt").write_text("dummy license")
+    (home / ".freesurfer.txt").mkdir()
     FreeSurferWrapper(str(bids_dataset), str(output_dir))
     assert os.environ["FS_LICENSE"] == str(fs_home / "license.txt")
+
+
+@pytest.mark.skipif(os.path.lexists("/license.txt"), reason="/license.txt is the first fallback location")
+def test_license_fallback_without_any_license_fails(bids_dataset, output_dir, license_fallback):
+    with pytest.raises(FileNotFoundError, match="license not found"):
+        FreeSurferWrapper(str(bids_dataset), str(output_dir))
+    assert "FS_LICENSE" not in os.environ
 
 
 def _zooms(sizes):
