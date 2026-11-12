@@ -252,6 +252,11 @@ class FreeSurferWrapper:
             ]
 
             for loc in license_locations:
+                # Docker creates a directory at the mount point when the
+                # license path on the host does not exist.
+                if os.path.isdir(loc):
+                    logger.warning(f"Ignoring {loc} as a FreeSurfer license: it is a directory")
+                    continue
                 if os.path.exists(loc):
                     logger.info(f"Using FreeSurfer license from {loc}")
                     os.environ["FS_LICENSE"] = loc

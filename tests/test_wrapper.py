@@ -405,6 +405,52 @@ def _layout(anat, t1w, t2w=()):
     return layout
 
 
+@pytest.fixture
+def license_fallback(tmp_path, monkeypatch):
+    """A FREESURFER_HOME and a home directory for the license fallback, with
+    the variables the wrapper sets restored afterwards."""
+    fs_home = tmp_path / "fs_home"
+    home = tmp_path / "home"
+    fs_home.mkdir()
+    home.mkdir()
+    monkeypatch.setenv("FREESURFER_HOME", str(fs_home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("FS_LICENSE", raising=False)
+    monkeypatch.delenv("SUBJECTS_DIR", raising=False)
+    return fs_home, home
+
+
+@pytest.mark.skipif(os.path.lexists("/license.txt"), reason="/license.txt is the first fallback location")
+def test_license_fallback_skips_a_directory(bids_dataset, output_dir, license_fallback, caplog):
+    """A directory where a license is expected (Docker makes one for a mount
+    whose host path does not exist) is not taken as the license."""
+    fs_home, home = license_fallback
+    (fs_home / "license.txt").mkdir()
+    (home / ".freesurfer.txt").write_text("dummy license")
+    with caplog.at_level("WARNING"):
+        FreeSurferWrapper(str(bids_dataset), str(output_dir))
+    assert os.environ["FS_LICENSE"] == str(home / ".freesurfer.txt")
+    assert f"Ignoring {fs_home / 'license.txt'}" in caplog.text
+
+
+@pytest.mark.skipif(os.path.lexists("/license.txt"), reason="/license.txt is the first fallback location")
+def test_license_fallback_with_only_a_directory_fails(bids_dataset, output_dir, license_fallback):
+    fs_home, home = license_fallback
+    (fs_home / "license.txt").mkdir()
+    with pytest.raises(FileNotFoundError, match="license not found"):
+        FreeSurferWrapper(str(bids_dataset), str(output_dir))
+    assert "FS_LICENSE" not in os.environ
+
+
+@pytest.mark.skipif(os.path.lexists("/license.txt"), reason="/license.txt is the first fallback location")
+def test_license_fallback_uses_a_file(bids_dataset, output_dir, license_fallback):
+    fs_home, home = license_fallback
+    (fs_home / "license.txt").write_text("dummy license")
+    (home / ".freesurfer.txt").write_text("dummy license")
+    FreeSurferWrapper(str(bids_dataset), str(output_dir))
+    assert os.environ["FS_LICENSE"] == str(fs_home / "license.txt")
+
+
 def _zooms(sizes):
     """voxel_size stand-in: look the file name up in sizes."""
     return lambda path: sizes[Path(path).name]
