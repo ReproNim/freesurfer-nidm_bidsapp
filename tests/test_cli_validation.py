@@ -281,6 +281,97 @@ class TestPathValidation:
         assert result.exit_code != 0
 
 
+class TestEmptyPathArguments:
+    """An empty path value is a usage error, not the current directory."""
+
+    @pytest.fixture(autouse=True)
+    def cwd(self, tmp_path, monkeypatch):
+        """Run from an empty directory, so a write to the cwd shows up."""
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        return cwd
+
+    @staticmethod
+    def _invoke(bids_dir, output_dir, *extra):
+        """Run the CLI with recon-all and the converter mocked."""
+        runner = CliRunner()
+        with patch('src.run.FreeSurferWrapper') as mock_wrapper, \
+             patch('src.run.subprocess.run'):
+            mock_wrapper.return_value.process_subject.return_value = True
+            mock_wrapper.return_value.get_processing_summary.return_value = {}
+            result = runner.invoke(cli, [
+                str(bids_dir), str(output_dir), 'participant',
+                '--participant-label', '001', '--skip-bids-validation', '--skip-nidm', *extra,
+            ])
+        return result, mock_wrapper
+
+    @pytest.mark.parametrize("empty", ["", " "])
+    def test_empty_bids_dir_is_a_usage_error(self, tmp_path, bids_single_session, cwd, empty):
+        """An empty value (an unset variable in a wrapper script) resolved to
+        the current directory, which was then read as the dataset."""
+        result, mock_wrapper = self._invoke(empty, tmp_path / "out")
+        assert result.exit_code == 2, result.output
+        assert "BIDS_DIR" in result.output, result.output
+        assert "must not be empty" in result.output, result.output
+        mock_wrapper.assert_not_called()
+        assert os.listdir(cwd) == []
+
+    @pytest.mark.parametrize("empty", ["", " "])
+    def test_empty_output_dir_is_a_usage_error(self, tmp_path, bids_single_session, cwd, empty):
+        """An empty value resolved to the current directory, so the run wrote
+        its derivatives into wherever the job started and exited 0."""
+        result, mock_wrapper = self._invoke(bids_single_session, empty)
+        assert result.exit_code == 2, result.output
+        assert "OUTPUT_DIR" in result.output, result.output
+        assert "must not be empty" in result.output, result.output
+        mock_wrapper.assert_not_called()
+        assert os.listdir(cwd) == []
+
+    @pytest.mark.parametrize("empty", ["", " "])
+    def test_empty_license_file_is_a_usage_error(self, tmp_path, bids_single_session, cwd, empty):
+        """An empty value resolved to the current directory, which exists, so
+        a directory was passed on as the license."""
+        result, mock_wrapper = self._invoke(
+            bids_single_session, tmp_path / "out", '--fs-license-file', empty)
+        assert result.exit_code == 2, result.output
+        assert "--fs-license-file" in result.output, result.output
+        assert "must not be empty" in result.output, result.output
+        mock_wrapper.assert_not_called()
+        assert os.listdir(cwd) == []
+
+    def test_directory_as_license_file_is_a_usage_error(self, tmp_path, bids_single_session, cwd):
+        """A directory is not a license. Docker creates one at the mount point
+        when the license path on the host does not exist."""
+        license_dir = tmp_path / "license.txt"
+        license_dir.mkdir()
+        result, mock_wrapper = self._invoke(
+            bids_single_session, tmp_path / "out", '--fs-license-file', str(license_dir))
+        assert result.exit_code == 2, result.output
+        assert "--fs-license-file" in result.output, result.output
+        assert "is a directory" in result.output, result.output
+        mock_wrapper.assert_not_called()
+        assert os.listdir(cwd) == []
+
+    def test_license_file_is_passed_to_the_wrapper(self, tmp_path, bids_single_session, cwd):
+        """A regular file is still accepted and reaches the wrapper resolved."""
+        license_file = tmp_path / "license.txt"
+        license_file.write_text("license")
+        result, mock_wrapper = self._invoke(
+            bids_single_session, tmp_path / "out", '--fs-license-file', str(license_file))
+        assert result.exit_code == 0, result.output
+        args, kwargs = mock_wrapper.call_args
+        assert str(license_file.resolve()) in [str(a) for a in (*args, *kwargs.values())]
+
+    def test_relative_paths_still_resolve_against_the_working_directory(self, tmp_path, bids_single_session, cwd):
+        """Only an empty value is refused: "." and other relative paths keep
+        meaning the current directory."""
+        result, mock_wrapper = self._invoke(bids_single_session, ".")
+        assert result.exit_code == 0, result.output
+        mock_wrapper.return_value.process_subject.assert_called_once()
+        assert os.listdir(cwd) != []
+
+
 class TestSkipFreeSurferFlag:
     """Test --skip-freesurfer flag."""
 

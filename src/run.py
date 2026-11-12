@@ -727,20 +727,35 @@ def _has_no_entries(path):
         return False
 
 
-class _NonEmptyPath(click.Path):
-    """click.Path that also rejects an empty value, an unsearchable directory
-    and a directory with no entries.
+class _GivenPath(click.Path):
+    """click.Path that rejects an empty value.
 
-    With resolve_path, "" (an unset variable in a wrapper) would resolve to the
-    current directory, which can hold a previous run's output. The NIDM lookup
-    only stats fixed candidate paths and never lists the directory, so search
-    permission (X_OK) is what it needs; without it the lookup raises
-    PermissionError mid-run.
+    click resolves the path before it checks it, so with resolve_path "" (an
+    unset variable in a wrapper script or job template) becomes the current
+    directory and then passes exists=True.
+    """
+
+    def _reject_empty_value(self, value, param, ctx):
+        if isinstance(value, str) and not value.strip():
+            self.fail("must not be empty", param, ctx)
+
+    def convert(self, value, param, ctx):
+        self._reject_empty_value(value, param, ctx)
+        return super().convert(value, param, ctx)
+
+
+class _NonEmptyPath(_GivenPath):
+    """_GivenPath that also rejects an unsearchable directory and a directory
+    with no entries.
+
+    An empty value would resolve to the current directory, which can hold a
+    previous run's output. The NIDM lookup only stats fixed candidate paths
+    and never lists the directory, so search permission (X_OK) is what it
+    needs; without it the lookup raises PermissionError mid-run.
     """
 
     def convert(self, value, param, ctx):
-        if isinstance(value, str) and not value.strip():
-            self.fail("must not be empty", param, ctx)
+        self._reject_empty_value(value, param, ctx)
         # click reports every stat() failure as "does not exist"; name the
         # real cause when it is something else, such as a parent directory
         # without search permission.
@@ -770,8 +785,8 @@ class _NonEmptyPath(click.Path):
 
 @click.command()
 @click.version_option(version=__version__)
-@click.argument("bids_dir", type=click.Path(exists=True, file_okay=False, resolve_path=True))
-@click.argument("output_dir", type=click.Path(file_okay=False, resolve_path=True))
+@click.argument("bids_dir", type=_GivenPath(exists=True, file_okay=False, resolve_path=True))
+@click.argument("output_dir", type=_GivenPath(file_okay=False, resolve_path=True))
 @click.argument(
     "analysis_level",
     type=click.Choice(["participant", "session"]),
@@ -792,7 +807,9 @@ class _NonEmptyPath(click.Path):
 @click.option(
     "--freesurfer_license",
     "--fs-license-file",
-    type=click.Path(exists=True, resolve_path=True),
+    # dir_okay=False: a directory here is usually a mount point Docker
+    # created because the license path on the host does not exist.
+    type=_GivenPath(exists=True, dir_okay=False, resolve_path=True),
     help="Path to FreeSurfer license file.",
 )
 @click.option("--skip-bids-validation", is_flag=True, help="Skip BIDS validation.")
