@@ -308,7 +308,10 @@ def test_logged_command_replays_the_conversion(tmp_path, monkeypatch):
     """The "Running command:" line is logged for replay. The conversion needs
     FREESURFER_NIDM_CONVERTER_FILE and the PYTHONPATH the app sets, so the
     line must carry them: run through bash as logged, it converts again. The
-    host PYTHONPATH holds a space, a quote and a $, so the line must quote it."""
+    host PYTHONPATH holds a space, a quote and a $, so the line must quote it:
+    a sitecustomize.py in that directory touches a marker, which the replay
+    creates only if its PYTHONPATH names the directory unchanged (double
+    quotes would expand the $HOME in it)."""
     import logging
     import os
     import shlex
@@ -318,6 +321,8 @@ def test_logged_command_replays_the_conversion(tmp_path, monkeypatch):
 
     odd_dir = tmp_path / "host lib's $HOME"
     odd_dir.mkdir()
+    marker = tmp_path / "sitecustomize-ran"
+    (odd_dir / "sitecustomize.py").write_text(f"open({str(marker)!r}, 'w').close()\n")
     host_pythonpath = os.environ.get("PYTHONPATH")
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, [host_pythonpath, str(odd_dir)])))
     out = tmp_path / "out"
@@ -346,12 +351,14 @@ def test_logged_command_replays_the_conversion(tmp_path, monkeypatch):
     subject_dir = out / "sub-001"
     for f in subject_dir.glob("*_nidm.jsonld"):
         f.unlink()
+    marker.unlink(missing_ok=True)
     env = {k: v for k, v in os.environ.items() if k not in (CONVERTER_FILE_ENV, "PYTHONPATH")}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(["bash", "-c", logged[0]], cwd=tmp_path, env=env, capture_output=True,
                             text=True, timeout=300)
     assert result.returncode == 0, result.stderr[-2000:]
     assert list(subject_dir.glob("aseg_nidm.jsonld")), list(subject_dir.iterdir())
+    assert marker.exists(), "the replay's PYTHONPATH does not name the host directory unchanged"
 
 
 @pytest.mark.parametrize("with_input_nidm", [True, False])

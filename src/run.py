@@ -641,8 +641,9 @@ def nidm_conversion(
             if copied_nidm:
                 logger.info(
                     f"The -n file {copied_nidm} is a temporary copy of {existing_nidm_file} that "
-                    f"is removed after the conversion; to rerun the command, copy the input "
-                    f"there first"
+                    f"is renamed to nidm.ttl when the conversion succeeds and deleted when it "
+                    f"fails; to rerun the command, copy the input there first and delete the "
+                    f"copy afterwards"
                 )
 
             result = subprocess.run(cmd, capture_output=True, text=True, env=env)
