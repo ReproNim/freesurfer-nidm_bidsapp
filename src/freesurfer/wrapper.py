@@ -230,7 +230,9 @@ class FreeSurferWrapper:
 
     def _setup_freesurfer_env(self):
         """Setup FreeSurfer environment and license."""
-        if "FREESURFER_HOME" not in os.environ:
+        # An empty value counts as unset: join("", "license.txt") would otherwise
+        # name a license.txt in the current directory.
+        if not os.environ.get("FREESURFER_HOME"):
             logger.error("FREESURFER_HOME environment variable not set")
             raise EnvironmentError("FREESURFER_HOME environment variable not set")
 
