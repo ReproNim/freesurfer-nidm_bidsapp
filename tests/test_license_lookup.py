@@ -181,3 +181,32 @@ def test_fs_license_env_naming_nothing_and_no_other_license_fails(tmp_path):
             tmp_path,
             {"FREESURFER_HOME": str(tmp_path / "empty"),
              "FS_LICENSE": str(tmp_path / "nothing-here.txt")})
+
+
+def test_dotdot_after_a_symlinked_directory_names_the_file_the_kernel_opens(tmp_path):
+    real = tmp_path / "real" / "deep"
+    real.mkdir(parents=True)
+    (tmp_path / "real" / "lic.txt").write_text("right")
+    (tmp_path / "lic.txt").write_text("wrong")  # what lexical collapsing would pick
+    (tmp_path / "link").symlink_to(real)
+    _, used = make_wrapper(
+        tmp_path,
+        {"FREESURFER_HOME": str(tmp_path), "FS_LICENSE": str(tmp_path / "link" / ".." / "lic.txt")})
+    assert used == str(tmp_path / "real" / "lic.txt")
+
+
+def test_broken_link_at_fs_license_is_an_error(tmp_path):
+    fs_home = tmp_path / "fshome"
+    fs_home.mkdir()
+    (fs_home / "license.txt").write_text("bundled")
+    (tmp_path / "lic.txt").symlink_to(tmp_path / "annex-not-fetched")
+    with pytest.raises(FileNotFoundError, match="lic.txt is a broken link to .*annex-not-fetched"):
+        make_wrapper(
+            tmp_path, {"FREESURFER_HOME": str(fs_home), "FS_LICENSE": str(tmp_path / "lic.txt")})
+
+
+def test_broken_link_at_the_docker_location_is_an_error(tmp_path):
+    docker = tmp_path / "docker.txt"
+    docker.symlink_to(tmp_path / "annex-not-fetched")
+    with pytest.raises(FileNotFoundError, match="is a broken link"):
+        make_wrapper(tmp_path, {"FREESURFER_HOME": str(tmp_path)}, docker_license=docker)

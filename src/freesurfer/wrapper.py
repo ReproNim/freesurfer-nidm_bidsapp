@@ -257,10 +257,15 @@ class FreeSurferWrapper:
             # directory is an error, like a directory at any other location.
             env_license = os.environ.get("FS_LICENSE")
             if env_license:
+                # A link whose target is missing (git-annex content not yet
+                # fetched) is a license that was meant to be supplied, like a
+                # directory. Checked before resolving, which loses the link.
+                self._reject_broken_link(env_license)
                 # Like click's resolve_path for --fs-license-file: recon-all
                 # runs from other directories, so a relative name must not be
-                # exported as it is.
-                env_license = os.path.abspath(env_license)
+                # exported as it is; realpath, not abspath, so that ".." after
+                # a symlinked directory names the file the kernel opens.
+                env_license = os.path.realpath(env_license)
                 if not os.path.exists(env_license):
                     message = (f"FS_LICENSE is set to {env_license}, which does not exist; "
                                "trying the standard license locations")
@@ -284,6 +289,7 @@ class FreeSurferWrapper:
                 # when the license path on the host does not exist. Stop
                 # rather than go on to a later location, which in the image
                 # is the license bundled with FreeSurfer.
+                self._reject_broken_link(loc)
                 if os.path.isdir(loc):
                     logger.error(f"FreeSurfer license location {loc} is a directory, not a file")
                     raise IsADirectoryError(
@@ -297,6 +303,17 @@ class FreeSurferWrapper:
             else:
                 logger.error("FreeSurfer license not found in standard locations")
                 raise FileNotFoundError("FreeSurfer license not found. Please specify with --freesurfer_license")
+
+    @staticmethod
+    def _reject_broken_link(loc):
+        """Raise if loc is a symlink whose target does not exist."""
+        if os.path.lexists(loc) and not os.path.exists(loc):
+            target = os.readlink(loc) if os.path.islink(loc) else "?"
+            logger.error(f"FreeSurfer license location {loc} is a broken link to {target}")
+            raise FileNotFoundError(
+                f"FreeSurfer license location {os.path.abspath(loc)} is a broken link to {target} "
+                "(for example git-annex content that has not been fetched)"
+            )
 
     def _create_recon_all_command(self, subject_id, t1w_images, t2w_images=None, session_label=None):
         """
