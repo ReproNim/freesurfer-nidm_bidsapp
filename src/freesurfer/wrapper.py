@@ -246,15 +246,23 @@ class FreeSurferWrapper:
                 logger.error(f"FreeSurfer license not found at: {self.freesurfer_license}")
                 raise FileNotFoundError(f"FreeSurfer license not found at: {self.freesurfer_license}")
         else:
-            # Try standard locations
+            # $FS_LICENSE first, then the standard locations. The images export
+            # FS_LICENSE with nothing bound at it unless the user binds a file there,
+            # so a value that names no regular file is skipped, not an error.
             license_locations = [
+                os.environ.get("FS_LICENSE"),
                 "/license.txt",  # Docker mount location
                 os.path.join(os.environ.get("FREESURFER_HOME", ""), "license.txt"),
                 os.path.expanduser("~/.freesurfer.txt"),
             ]
 
+            env_license = license_locations[0]
+            if env_license and not os.path.isfile(env_license):
+                logger.warning(f"FS_LICENSE is set to {env_license}, which is not a file; "
+                               "trying the standard license locations")
+
             for loc in license_locations:
-                if os.path.exists(loc):
+                if loc and (os.path.isfile(loc) if loc == env_license else os.path.exists(loc)):
                     logger.info(f"Using FreeSurfer license from {loc}")
                     os.environ["FS_LICENSE"] = loc
                     break

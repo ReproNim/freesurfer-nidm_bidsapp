@@ -44,3 +44,61 @@ def test_empty_freesurfer_home_is_treated_as_unset(tmp_path):
 def test_unset_freesurfer_home_still_stops(tmp_path):
     with pytest.raises(EnvironmentError, match="FREESURFER_HOME environment variable not set"):
         make_wrapper(tmp_path, {})
+
+
+def test_fs_license_env_is_used_when_it_names_a_file(tmp_path):
+    lic = tmp_path / "bound.txt"
+    lic.write_text("lic")
+    fs_home = tmp_path / "fshome"
+    fs_home.mkdir()
+    (fs_home / "license.txt").write_text("other")
+    _, used = make_wrapper(
+        tmp_path, {"FREESURFER_HOME": str(fs_home), "FS_LICENSE": str(lic)})
+    assert used == str(lic)
+
+
+def test_option_wins_over_fs_license_env(tmp_path):
+    env_lic = tmp_path / "env.txt"
+    env_lic.write_text("a")
+    opt_lic = tmp_path / "opt.txt"
+    opt_lic.write_text("b")
+    _, used = make_wrapper(
+        tmp_path, {"FREESURFER_HOME": str(tmp_path), "FS_LICENSE": str(env_lic)},
+        license_file=str(opt_lic))
+    assert used == str(opt_lic)
+
+
+def test_fs_license_env_wins_over_freesurfer_home_file(tmp_path):
+    fs_home = tmp_path / "fshome"
+    fs_home.mkdir()
+    (fs_home / "license.txt").write_text("home")
+    lic = tmp_path / "env.txt"
+    lic.write_text("env")
+    _, used = make_wrapper(
+        tmp_path, {"FREESURFER_HOME": str(fs_home), "FS_LICENSE": str(lic)})
+    assert used == str(lic)
+
+
+@pytest.mark.parametrize("value", ["", "MISSING", "DIR"])
+def test_fs_license_env_naming_no_file_falls_back_to_the_fixed_locations(tmp_path, value):
+    # The images always export FS_LICENSE, so a path with nothing bound at it is the
+    # normal state and must not block the documented fixed locations.
+    if value == "MISSING":
+        value = str(tmp_path / "nothing-here.txt")
+    elif value == "DIR":
+        (tmp_path / "adir").mkdir()
+        value = str(tmp_path / "adir")
+    fs_home = tmp_path / "fshome"
+    fs_home.mkdir()
+    (fs_home / "license.txt").write_text("home")
+    _, used = make_wrapper(
+        tmp_path, {"FREESURFER_HOME": str(fs_home), "FS_LICENSE": value})
+    assert used == str(fs_home / "license.txt")
+
+
+def test_fs_license_env_naming_no_file_and_no_other_license_fails(tmp_path):
+    with pytest.raises(FileNotFoundError, match="FreeSurfer license not found"):
+        make_wrapper(
+            tmp_path,
+            {"FREESURFER_HOME": str(tmp_path / "empty"),
+             "FS_LICENSE": str(tmp_path / "nothing-here.txt")})
