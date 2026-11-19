@@ -117,7 +117,7 @@ apptainer run \
 - Optional arguments:
   - `--participant-label`: One participant label, with or without the `sub-` prefix.
   - `--session-label`: One session label, with or without the `ses-` prefix. It is accepted in participant mode for BABS session-wise jobs.
-  - `--fs-license-file`: Path to the FreeSurfer license file. Without it, the license is the first of these that exists: the file `$FS_LICENSE` names (the images set it to `/SGLR/FREESURFER_HOME/license.txt`; a value that is empty or names no file is skipped with a warning), `/license.txt`, `$FREESURFER_HOME/license.txt`, `~/.freesurfer.txt`. `FREESURFER_HOME` must be set and non-empty.
+  - `--fs-license-file`: Path to the FreeSurfer license file. Without it, the license is the first of these that exists: the file `$FS_LICENSE` names (the images set it to `/SGLR/FREESURFER_HOME/license.txt`; a relative name is resolved against the current directory, an empty value is ignored, and a name with nothing at it is skipped with a log message), `/license.txt`, `$FREESURFER_HOME/license.txt` (the images ship one), `~/.freesurfer.txt`. A directory at any of these is an error, and later ones are not tried. `FREESURFER_HOME` must be set and non-empty.
   - `--skip-bids-validation`: Skip PyBIDS validation.
   - `--skip-freesurfer`: Reuse a completed `recon-all` directory and run only the remaining export steps. The directory is checked against the images it was made from; see [Reusing an existing reconstruction](#reusing-an-existing-reconstruction).
   - `--skip-nidm`: Skip NIDM output generation.

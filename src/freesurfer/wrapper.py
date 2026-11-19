@@ -37,6 +37,11 @@ BIDS_VERSION = "1.8.0"
 # exits 0 with a meaningless reconstruction, so such inputs are refused.
 DEFAULT_MAX_VOXEL_SIZE = 2.0
 
+# License locations. The Dockerfile and Singularity recipe export FS_LICENSE as
+# IMAGE_FS_LICENSE; DOCKER_LICENSE is where the README binds a license file.
+IMAGE_FS_LICENSE = "/SGLR/FREESURFER_HOME/license.txt"
+DOCKER_LICENSE = "/license.txt"
+
 
 def voxel_size(path):
     """Voxel dimensions (mm) of the first three axes of an image header.
@@ -246,23 +251,46 @@ class FreeSurferWrapper:
                 logger.error(f"FreeSurfer license not found at: {self.freesurfer_license}")
                 raise FileNotFoundError(f"FreeSurfer license not found at: {self.freesurfer_license}")
         else:
-            # $FS_LICENSE first, then the standard locations. The images export
-            # FS_LICENSE with nothing bound at it unless the user binds a file there,
-            # so a value that names no regular file is skipped, not an error.
+            # $FS_LICENSE first, then the standard locations. An empty FS_LICENSE
+            # is ignored. The images export FS_LICENSE whether or not a license is
+            # bound there, so a value naming nothing is skipped; one naming a
+            # directory is an error, like a directory at any other location.
+            env_license = os.environ.get("FS_LICENSE")
+            if env_license:
+                # Like click's resolve_path for --fs-license-file: recon-all
+                # runs from other directories, so a relative name must not be
+                # exported as it is.
+                env_license = os.path.abspath(env_license)
+                if not os.path.exists(env_license):
+                    message = (f"FS_LICENSE is set to {env_license}, which does not exist; "
+                               "trying the standard license locations")
+                    if env_license == IMAGE_FS_LICENSE:
+                        logger.info(message)
+                    else:
+                        logger.warning(message)
+                    env_license = None
             license_locations = [
-                os.environ.get("FS_LICENSE"),
-                "/license.txt",  # Docker mount location
-                os.path.join(os.environ.get("FREESURFER_HOME", ""), "license.txt"),
-                os.path.expanduser("~/.freesurfer.txt"),
+                loc for loc in (
+                    env_license,
+                    DOCKER_LICENSE,  # Docker mount location
+                    os.path.join(os.environ.get("FREESURFER_HOME", ""), "license.txt"),
+                    os.path.expanduser("~/.freesurfer.txt"),
+                ) if loc
             ]
 
-            env_license = license_locations[0]
-            if env_license and not os.path.isfile(env_license):
-                logger.warning(f"FS_LICENSE is set to {env_license}, which is not a file; "
-                               "trying the standard license locations")
-
             for loc in license_locations:
-                if loc and (os.path.isfile(loc) if loc == env_license else os.path.exists(loc)):
+                # A directory here means a license was meant to be supplied
+                # and was not: "docker run -v" creates one at the mount point
+                # when the license path on the host does not exist. Stop
+                # rather than go on to a later location, which in the image
+                # is the license bundled with FreeSurfer.
+                if os.path.isdir(loc):
+                    logger.error(f"FreeSurfer license location {loc} is a directory, not a file")
+                    raise IsADirectoryError(
+                        f"FreeSurfer license location {loc} is a directory, not a file "
+                        "(a Docker -v mount creates one when the host path does not exist)"
+                    )
+                if os.path.exists(loc):
                     logger.info(f"Using FreeSurfer license from {loc}")
                     os.environ["FS_LICENSE"] = loc
                     break
