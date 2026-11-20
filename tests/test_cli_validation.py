@@ -428,6 +428,163 @@ class TestNIDMInputPreflight:
         assert result.exit_code == 1, result.output
         mock_wrapper.return_value.process_subject.assert_not_called()
 
+    @staticmethod
+    def _input_nidm(nidm_dir, subject_id, *parts):
+        """An input NIDM at nidm_dir/parts whose only subject has subject_id
+        (no subject at all for None)."""
+        text = (
+            "@prefix prov: <http://www.w3.org/ns/prov#> .\n"
+            "@prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/> .\n"
+            "@prefix nidm: <http://purl.org/nidash/nidm#> .\n"
+            "<http://iri.nidash.org/project> a nidm:Project, prov:Activity .\n"
+        )
+        if subject_id is not None:
+            text += ("<http://iri.nidash.org/person> a prov:Agent, prov:Person ;"
+                     f' ndar:src_subject_id "{subject_id}" .\n')
+        target = nidm_dir.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        return nidm_dir
+
+    def _invoke_converting(self, bids_dir, output_dir, level, *extra):
+        """As _invoke, with nidm_conversion replaced by a mock."""
+        with patch('src.run.nidm_conversion') as mock_conversion:
+            result, mock_wrapper = self._invoke(bids_dir, output_dir, level, *extra)
+        return result, mock_wrapper, mock_conversion
+
+    @staticmethod
+    def _one_session(tmp_path):
+        """A BIDS dataset whose subject has a single session, ses-baseline."""
+        bids = tmp_path / "bids-one-session"
+        anat = bids / "sub-001" / "ses-baseline" / "anat"
+        anat.mkdir(parents=True)
+        (bids / "dataset_description.json").write_text(
+            json.dumps({"Name": "x", "BIDSVersion": "1.8.0", "DatasetType": "raw"}))
+        (anat / "sub-001_ses-baseline_T1w.nii.gz").touch()
+        return bids
+
+    @pytest.mark.parametrize("level", [
+        "participant", "session", "participant-with-session-label", "participant-detected-session"])
+    def test_input_without_the_subject_fails_before_recon_all(
+            self, tmp_path, request, level):
+        """fs_to_nidm refuses an input NIDM that holds other subjects but not
+        this one; the app runs fs_to_nidm's own lookup on it before recon-all,
+        so the job fails in seconds, with fs_to_nidm's message. BABS runs
+        session-wise jobs as `participant --session-label X`, and the
+        participant level also detects a single session; the session-level
+        input (sub-<id>/ses-<x>/nidm.ttl) must be the one checked."""
+        cli_level, extra = level.split("-", 1)[0], ()
+        parts = ("sub-001", "ses-baseline", "nidm.ttl")
+        if level == "participant":
+            bids = request.getfixturevalue("bids_single_session")
+            parts = ("sub-001", "nidm.ttl")
+        elif level == "participant-detected-session":
+            bids = self._one_session(tmp_path)
+        else:
+            bids = request.getfixturevalue("bids_multi_session")
+            extra = ('--session-label', 'baseline')
+        nidm = self._input_nidm(tmp_path / "NIDM", "2", *parts)
+        result, mock_wrapper, mock_conversion = self._invoke_converting(
+            bids, tmp_path / "out", cli_level, *extra, '--nidm-input-dir', str(nidm))
+        assert result.exit_code == 1, result.output
+        mock_wrapper.return_value.process_subject.assert_not_called()
+        mock_conversion.assert_not_called()
+        errors = [line for line in result.output.splitlines() if " - ERROR - " in line]
+        assert any("Subject ID sub-001 not found in the input NIDM, whose subject IDs are: 2"
+                   in e for e in errors), result.output
+
+    @pytest.mark.parametrize("subject_id", ["1", "sub-001", None])
+    def test_input_with_the_subject_proceeds_to_recon_all(
+            self, tmp_path, bids_single_session, subject_id):
+        """A matching id, in any spelling, and an input without subjects
+        (--forcenidm adds one) pass the check."""
+        nidm = self._input_nidm(tmp_path / "NIDM", subject_id, "sub-001", "nidm.ttl")
+        result, mock_wrapper, mock_conversion = self._invoke_converting(
+            bids_single_session, tmp_path / "out", 'participant', '--nidm-input-dir', str(nidm))
+        assert result.exit_code == 0, result.output
+        mock_wrapper.return_value.process_subject.assert_called_once()
+        mock_conversion.assert_called_once()
+
+    POINTER = "/annex/objects/MD5E-s41987--0123456789abcdef0123456789abcdef.ttl\n"
+
+    @pytest.mark.parametrize("content, unfetched", [
+        ("@prefix : <http://example.org/> .\n:a :b \n", False),
+        (POINTER, True),
+    ], ids=["turtle-error", "unlocked-annex-pointer"])
+    def test_unparseable_input_fails_before_recon_all_naming_the_file(
+            self, tmp_path, bids_single_session, content, unfetched):
+        """An input rdflib cannot parse failed the job with only "Error during
+        processing: at line 1 of <>: Bad syntax", which names no file. The
+        error names the input and says it could not be parsed as Turtle; an
+        unlocked git-annex pointer (a datalad clone before `datalad get`) is
+        called that."""
+        target = tmp_path / "NIDM" / "sub-001" / "nidm.ttl"
+        target.parent.mkdir(parents=True)
+        target.write_text(content)
+        result, mock_wrapper, mock_conversion = self._invoke_converting(
+            bids_single_session, tmp_path / "out", 'participant', '--nidm-input-dir',
+            str(tmp_path / "NIDM"))
+        assert result.exit_code == 1, result.output
+        mock_wrapper.return_value.process_subject.assert_not_called()
+        mock_conversion.assert_not_called()
+        errors = [line for line in result.output.splitlines() if " - ERROR - " in line]
+        assert any(str(target) in e and "could not be parsed as Turtle" in e for e in errors), errors
+        assert any("datalad get" in e and "git-annex" in e for e in errors) == unfetched, errors
+        assert not any("Error during processing" in e for e in errors), errors
+
+    @pytest.mark.parametrize("content", [
+        "",
+        "@prefix prov: <http://www.w3.org/ns/prov#> .\n"
+        "@prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/> .\n"
+        "<http://iri.nidash.org/person> a prov:Agent, prov:Person ; ndar:src_subject_id \"1\" .\n",
+    ], ids=["empty-file", "subject-without-project"])
+    def test_input_without_a_project_fails_before_recon_all(
+            self, tmp_path, bids_single_session, content):
+        """fs_to_nidm attaches the stats to the input's nidm:Project and
+        crashes after recon-all (UnboundLocalError) when there is none, also
+        for an empty file. The check refuses such an input first."""
+        target = tmp_path / "NIDM" / "sub-001" / "nidm.ttl"
+        target.parent.mkdir(parents=True)
+        target.write_text(content)
+        result, mock_wrapper, mock_conversion = self._invoke_converting(
+            bids_single_session, tmp_path / "out", 'participant', '--nidm-input-dir',
+            str(tmp_path / "NIDM"))
+        assert result.exit_code == 1, result.output
+        mock_wrapper.return_value.process_subject.assert_not_called()
+        mock_conversion.assert_not_called()
+        errors = [line for line in result.output.splitlines() if " - ERROR - " in line]
+        assert any(str(target) in e and "no nidm:Project" in e for e in errors), errors
+
+    def test_lookup_messages_are_logged_not_printed(self, tmp_path, capsys, caplog):
+        """fs_to_nidm's find_subject prints which node it chose (with several
+        matching nodes, the one that owns an anatomical MRI acquisition). The
+        check captures that stdout and logs each line as "NIDM input check:"."""
+        import logging
+        from src.run import nidm_input_subject_problem
+
+        owner, other = "http://iri.nidash.org/owner", "http://iri.nidash.org/other"
+        target = tmp_path / "nidm.ttl"
+        target.write_text(
+            "@prefix prov: <http://www.w3.org/ns/prov#> .\n"
+            "@prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/> .\n"
+            "@prefix nidm: <http://purl.org/nidash/nidm#> .\n"
+            "<http://iri.nidash.org/project> a nidm:Project, prov:Activity .\n"
+            f'<{owner}> a prov:Agent, prov:Person ; ndar:src_subject_id "1" .\n'
+            f'<{other}> a prov:Agent, prov:Person ; ndar:src_subject_id "1" .\n'
+            "<http://iri.nidash.org/acq> a nidm:AcquisitionObject, prov:Entity ;\n"
+            "  nidm:hadAcquisitionModality nidm:MagneticResonanceImaging ;\n"
+            "  nidm:hadImageUsageType nidm:Anatomical ;\n"
+            "  prov:wasGeneratedBy <http://iri.nidash.org/act> .\n"
+            "<http://iri.nidash.org/act> a prov:Activity ;\n"
+            f"  prov:qualifiedAssociation [ a prov:Association ; prov:agent <{owner}> ] .\n")
+        capsys.readouterr()
+        with caplog.at_level(logging.INFO, logger="freesurfer-nidm"):
+            assert nidm_input_subject_problem(target, "001") is None
+        assert capsys.readouterr().out == ""
+        logged = [r.getMessage() for r in caplog.records if r.getMessage().startswith("NIDM input check: ")]
+        assert len(logged) == 1, logged
+        assert "matches 2 subject agents" in logged[0] and f"using {owner}" in logged[0], logged
+
     def test_skip_nidm_skips_the_preflight(self, tmp_path, bids_single_session):
         nidm = self._unfetched(tmp_path / "NIDM", "sub-001", "nidm.ttl")
         result, mock_wrapper = self._invoke(
